@@ -14,6 +14,10 @@ import {FrenWorkerGate} from "../../src/frens/FrenWorkerGate.sol";
 import {FrenArt, FrenRenderer} from "../../src/frens/FrenRenderer.sol";
 import {FrensRules} from "./FrensRules.sol";
 
+interface ITransferRule {
+    function isDistributor(address) external view returns (bool);
+}
+
 interface IOwned {
     function owner() external view returns (address);
 }
@@ -263,5 +267,52 @@ contract FrensLaunchForkTest is Test, FrensRules {
         vm.prank(address(factory));
         vm.expectRevert();
         frens.setRenderer(address(0xBEEF));
+    }
+
+    /* ── a new address, no whitelist yet: the floor in $IMD ─────── */
+
+    /// @dev Before IMD6900 whitelists the frens (a 48h timelock op for any new address), the floor's buys are paused
+    ///      (cap 0): the floor stays $IMD, which moves freely, so minting, selling to the floor and buying back all
+    ///      work on day one. Once the op lands, the cap goes back up and the $IMD is bought into IMD6900.
+    function test_floorInImd_worksBeforeAnyWhitelist() public {
+        _setup();
+        assertFalse(ITransferRule(s.IMD6900()).isDistributor(d.frens), "no whitelist");
+        vm.startPrank(team);
+        launch.govern(abi.encodeCall(IMD6900Frens.setParams, (1, 0, 0))); // floor buys paused
+        launch.first{value: 0.47 ether}(140);
+        launch.govern(abi.encodeCall(IMD6900Frens.setMintOpen, (true)));
+        FrenWorkerGate(d.gate).openPublic();
+        vm.stopPrank();
+        assertEq(frens.reserve(), 0, "no IMD6900 bought");
+        assertGt(frens.floorImd(), 0, "the floor waits in $IMD");
+
+        address minter = address(uint160(uint256(keccak256("a public minter"))));
+        address buyer = address(uint160(uint256(keccak256("a buyer"))));
+        deal(s.IMD(), minter, 10e18);
+        deal(s.IMD(), buyer, 10e18);
+        vm.startPrank(minter);
+        IERC20(s.IMD()).approve(d.frens, type(uint256).max);
+        frens.requestMint(1, type(uint256).max);
+        uint256 id = frens.totalMinted();
+        (uint256 paid6900, uint256 paidImd) = frens.recycle(id); // sell to the floor
+        vm.stopPrank();
+        assertEq(paid6900, 0);
+        assertGt(paidImd, 0, "sold for the floor, in $IMD");
+        (, uint256 floorBefore) = frens.floorPerFren();
+        vm.startPrank(buyer);
+        IERC20(s.IMD()).approve(d.frens, type(uint256).max);
+        frens.buyTreasury(id, 0, type(uint256).max); // buy it back at 2x
+        vm.stopPrank();
+        (, uint256 floorAfter) = frens.floorPerFren();
+        assertEq(frens.ownerOf(id), buyer);
+        assertGt(floorAfter, floorBefore, "the ratchet: the floor stepped up");
+
+        // the timelock's op for this address lands: buys back on, the waiting $IMD becomes IMD6900
+        _batch();
+        vm.prank(team);
+        launch.govern(abi.encodeCall(IMD6900Frens.setParams, (1, 50e18, 0.5 ether)));
+        vm.roll(block.number + 2);
+        frens.buyFloor(0);
+        assertGt(frens.reserve(), 0, "now in IMD6900");
     }
 }
