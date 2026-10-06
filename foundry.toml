@@ -1,0 +1,22 @@
+# IMD6900 Frens, launched through the IMD swarm. Builds offline: every library is vendored under lib/ (only the files
+# imported). solc 0.8.30, via-IR, 200 runs, cancun: IMD6900Frens is 220 bytes under EIP-170's limit with exactly these
+# settings, another compiler may not fit it. bytecode_hash = "none", as IMD's launches require.
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+libs = ["lib"]
+solc = "0.8.30"
+bytecode_hash = "none"
+optimizer = true
+optimizer_runs = 200
+via_ir = true
+evm_version = "cancun"
+fs_permissions = [{ access = "read", path = "./script/frens/art" }, { access = "read", path = "./script/frens/price" }]
+remappings = [
+    "solady/=lib/solady/src/",
+    "@uniswap/v4-core/=lib/v4-core/",
+    "forge-std/=lib/forge-std/src/",
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+]
