@@ -76,8 +76,10 @@ interface IFrenRenderer {
 ///  A big request reveals in parts (each a transaction under EIP-7825's gas cap), all from the one voucher.
 ///
 ///  What a minter holds decides how rare a fren the agents may build. requestMint reads their $IMD, IMD6900 and
-///  identity.md NFTs (never while v4's PoolManager is unlocked: no borrowed bag) and gives the request a tier (0 to 3);
-///  every trait value has a cap and a lowest tier that may take it.
+///  identity.md NFTs as they stand after paying, never while v4's PoolManager is unlocked (none of its $IMD can be
+///  flash-borrowed for a tier), and gives the request a tier (0 to 3). The tier is that snapshot of the bag: what the
+///  wallet holds at the mint counts, however it came by it. Every trait value has a cap and a lowest tier that may take
+///  it.
 ///
 ///  When the job is done, the relayer reads the agents' frens from IMD and signs a voucher for them; anyone sends it
 ///  and the frens reveal. The contract checks everything that matters itself (each combo is unique, under its caps,
@@ -88,7 +90,8 @@ interface IFrenRenderer {
 ///  The floor is MiFrens' flywheel:
 ///  - floorPerFren = reserve / frens out in the world.
 ///  - recycle(): any holder can sell a fren to the treasury for the floor, any time: its share of the IMD6900 reserve
-///    and of the $IMD still waiting to be bought into it.
+///    and of the $IMD still waiting to be bought into it. Only the last fren out in the world stays out (LastFrenOut):
+///    with none out the floor would have no owner, and whoever minted next would take every fee that arrived meanwhile.
 ///  - buyTreasury(): costs twice the floor (both parts), and all of it stays in the floor, so it rises for everyone.
 ///  - Trading-fee ETH and marketplace royalties are bought into the reserve too, through $IMD (see FrenSwapper).
 ///  - Nothing else takes IMD6900 out of the reserve: there is no withdraw.
@@ -121,7 +124,8 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
     address internal constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
     bytes4 internal constant ERC1271_MAGIC = 0x1626ba7e;
     /// @notice Uniswap v4's PoolManager holds most of the $IMD there is, and lends any of it for free inside unlock():
-    ///         a bag is read only when it's locked, so a borrowed one can't reach a tier
+    ///         a bag is read only when it's locked, so none of that can reach a tier (the tier is otherwise a snapshot
+    ///         of what the wallet holds at the mint)
     address internal constant POOL_MANAGER = 0x000000000004444c5dc75cB358380D2e3dE08A90;
     bytes32 internal constant UNLOCKED_SLOT = 0xc090fc4683624cfc3884e9d8de5eca132f2d0ec062aff75d43c0465d5ceeab23; // Lock.IS_UNLOCKED_SLOT
 
@@ -238,10 +242,16 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
 
     /* ── events ─────────────────────────────────────────────────── */
 
-    event FrensMinted(uint256 indexed requestId, address indexed minter, uint256 firstToken, uint8 count, uint8 tier, uint256 paid);
+    event FrensMinted(
+        uint256 indexed requestId, address indexed minter, uint256 firstToken, uint8 count, uint8 tier, uint256 paid
+    );
     event JobPaid(uint256 indexed requestId, address indexed payer);
-    event JobApproved(uint256 indexed requestId, uint256 nonce, uint256 deadline, bytes32 permitDigest, bytes32 quoteDigest);
-    event Revealed(uint256 indexed requestId, uint256 indexed tokenId, uint24 combo, string imdJobId, bytes32 outputHash);
+    event JobApproved(
+        uint256 indexed requestId, uint256 nonce, uint256 deadline, bytes32 permitDigest, bytes32 quoteDigest
+    );
+    event Revealed(
+        uint256 indexed requestId, uint256 indexed tokenId, uint24 combo, string imdJobId, bytes32 outputHash
+    );
     event TraitsSealed();
     event MinTierLowered(uint8 trait, uint8 value, uint8 minTier);
     event FloorBought(uint256 imdIn, uint256 ethIn, uint256 imd6900Out, uint256 reserve);
@@ -270,6 +280,7 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
     error Flash();
     error NothingToUnwrap();
     error InvalidTransferValidator();
+    error LastFrenOut();
 
     modifier onlyKeeper() {
         if (msg.sender != keeper && msg.sender != governor) revert NotKeeper();
@@ -334,7 +345,8 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
     function tokenURI(uint256 id) public view override returns (string memory) {
         if (!_exists(id)) revert TokenDoesNotExist();
         uint256 seed = seedOf[id];
-        return seed == 0 ? IFrenRenderer(renderer).pendingURI(id) : IFrenRenderer(renderer).tokenURI(id, comboOf[id], seed);
+        return
+            seed == 0 ? IFrenRenderer(renderer).pendingURI(id) : IFrenRenderer(renderer).tokenURI(id, comboOf[id], seed);
     }
 
     /* ── the traits: set once, then sealed ──────────────────────── */
@@ -378,7 +390,9 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
     /// @notice Adds a pair of values that together need a higher tier. Before sealing only.
     function addPairRule(PairRule calldata p) external onlyGovernor {
         if (traitsSealed) revert TraitsAreSealed();
-        if (_pairs.length >= MAX_PAIR_RULES || p.traitA >= TRAITS || p.traitB >= TRAITS || p.minTier > TIERS) revert BadTraits();
+        if (_pairs.length >= MAX_PAIR_RULES || p.traitA >= TRAITS || p.traitB >= TRAITS || p.minTier > TIERS) {
+            revert BadTraits();
+        }
         if (p.valueA >= valuesOf(p.traitA) || p.valueB >= valuesOf(p.traitB)) revert BadTraits();
         _pairs.push(p);
     }
@@ -388,7 +402,9 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
         if (traitsSealed) revert TraitsAreSealed();
         if (_configured != type(uint8).max) revert BadTraits();
         uint256 chars;
-        for (uint8 v; v < valuesOf(CHARACTER); ++v) chars += _rules[v].cap;
+        for (uint8 v; v < valuesOf(CHARACTER); ++v) {
+            chars += _rules[v].cap;
+        }
         if (chars != SUPPLY) revert BadTraits();
         traitsSealed = true;
         emit TraitsSealed();
@@ -425,7 +441,11 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
     }
 
     function _bag(address account) internal view returns (uint256, uint256, uint256) {
-        return (IERC20Min(imd).balanceOf(account), IERC20Min(imd6900).balanceOf(account), IERC20Min(identity).balanceOf(account));
+        return (
+            IERC20Min(imd).balanceOf(account),
+            IERC20Min(imd6900).balanceOf(account),
+            IERC20Min(identity).balanceOf(account)
+        );
     }
 
     function _tier(uint256 a, uint256 b, uint256 c) internal view returns (uint8) {
@@ -443,7 +463,9 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
         }
         for (uint256 i; i < _pairs.length; ++i) {
             PairRule memory p = _pairs[i];
-            if (valueOf(combo, p.traitA) == p.valueA && valueOf(combo, p.traitB) == p.valueB && p.minTier > tier) tier = p.minTier;
+            if (valueOf(combo, p.traitA) == p.valueA && valueOf(combo, p.traitB) == p.valueB && p.minTier > tier) {
+                tier = p.minTier;
+            }
         }
     }
 
@@ -451,7 +473,9 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
     ///         4 the tier is too low. The relayer checks before it signs; claim checks again.
     function check(uint24 combo, uint8 tier) public view returns (uint8 code) {
         if (combo >> 23 != 0) return 1;
-        for (uint8 t; t < TRAITS; ++t) if (valueOf(combo, t) >= valuesOf(t)) return 1;
+        for (uint8 t; t < TRAITS; ++t) {
+            if (valueOf(combo, t) >= valuesOf(t)) return 1;
+        }
         if (valueOf(combo, CHARACTER) != 0 && valueOf(combo, HAT) != 0) return 1; // hats fit only the cyborg pepe
         if (taken[combo]) return 2;
         for (uint8 t; t < TRAITS; ++t) {
@@ -470,13 +494,15 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
 
     /// @notice What the next `count` frens cost together, now: the curve's price, and never less than the floor, their
     ///         share of it at what its IMD6900 costs (see FrenSwapper.floorRate). So nobody can mint and sell straight
-    ///         back to the floor for more than they paid: they'd get back the floor less their share of the job.
+    ///         back to the floor for more than they paid: they'd get back the floor less their share of the job. The
+    ///         floor counts the $IMD that arrived since its last buy too: the mint's own buy sweeps it in first.
     function quote(uint256 count) public view returns (uint256 price) {
         if (count == 0 || totalMinted + count > SUPPLY) revert SoldOut();
         price = _prices(totalMinted, count);
         uint256 out = totalMinted - inTreasury();
         if (out != 0) {
-            uint256 value = floorImd;
+            (uint256 value,) = _unswept();
+            value += floorImd;
             if (reserve != 0) value += reserve * 1e18 / IFrenSwapper(swapper).floorRate();
             uint256 atFloor = count * value / out;
             if (atFloor > price) price = atFloor;
@@ -488,7 +514,10 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
         assembly ("memory-safe") {
             let m := mload(0x40)
             extcodecopy(t, m, add(1, mul(3, from)), mul(3, count))
-            for { let i := 0 } lt(i, count) { i := add(i, 1) } { total := add(total, shr(232, mload(add(m, mul(3, i))))) }
+            for { let i := 0 } lt(i, count) { i := add(i, 1) } { total := add(
+                total,
+                shr(232, mload(add(m, mul(3, i))))
+            ) }
         }
         total *= PRICE_UNIT;
     }
@@ -501,19 +530,26 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
 
     /// @notice The same, paid by the caller for `minter` (how FrenMinter mints for ETH): the frens and the tier are the
     ///         minter's.
-    function requestMintFor(address minter, uint8 count, uint256 maxPay) public nonReentrant returns (uint256 requestId) {
+    function requestMintFor(address minter, uint8 count, uint256 maxPay)
+        public
+        nonReentrant
+        returns (uint256 requestId)
+    {
         // before opening only the owner mints (the strategy's first frens); after, the workers' window comes first
         if (!mintOpen && msg.sender != governor) revert MintClosed();
         if (!traitsSealed) revert TraitsNotSealed();
         // never into the treasury: its frens would take the tier of the floor's own bag, for anyone to buy out
-        if (count == 0 || count > MAX_PER_REQUEST || minter == address(0) || minter == address(this)) revert BadRequest();
+        if (count == 0 || count > MAX_PER_REQUEST || minter == address(0) || minter == address(this)) {
+            revert BadRequest();
+        }
         if (mintOpen && workerGate != address(0)) IWorkerGate(workerGate).spend(minter, count);
         uint256 paid = quote(count);
         if (paid > maxPay) revert Cap();
         SafeTransferLib.safeTransferFrom(imd, msg.sender, address(this), paid);
         uint8 tier = _lockedTierOf(minter);
         if (count > maxMint[tier]) revert OverTierLimit(maxMint[tier]);
-        bool lowTier = tier < _rules[uint256(CHARACTER) << 8 | 1].minTier && tier < _rules[uint256(CHARACTER) << 8 | 2].minTier;
+        bool lowTier =
+            tier < _rules[uint256(CHARACTER) << 8 | 1].minTier && tier < _rules[uint256(CHARACTER) << 8 | 2].minTier;
         if (lowTier) {
             // below mumu and bobo this request can only become pepes: make sure enough are left for it
             Rule storage pepe = _rules[uint256(CHARACTER) << 8];
@@ -526,7 +562,9 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
         uint256 first = totalMinted + 1;
         totalMinted += count;
         requests[requestId] = Request(minter, tier, lowTier, false, count, 0, 1, uint32(first), 0, 0);
-        for (uint256 i; i < count; ++i) _mint(minter, first + i);
+        for (uint256 i; i < count; ++i) {
+            _mint(minter, first + i);
+        }
         emit FrensMinted(requestId, minter, first, count, tier, paid);
         _buyFloor(0); // the floor's share into IMD6900 now, if this block hasn't bought yet
     }
@@ -535,11 +573,13 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
     bytes32 internal constant VOUCHER_TYPEHASH =
         keccak256("FrenVoucher(uint256 requestId,uint24[] combos,bytes32 jobId,bytes32 outputHash,uint256 deadline)");
 
-    function voucherDigest(uint256 requestId, uint24[] calldata combos, string calldata jobId, bytes32 outputHash, uint256 deadline)
-        public
-        view
-        returns (bytes32)
-    {
+    function voucherDigest(
+        uint256 requestId,
+        uint24[] calldata combos,
+        string calldata jobId,
+        bytes32 outputHash,
+        uint256 deadline
+    ) public view returns (bytes32) {
         bytes32 domain = keccak256(
             abi.encode(
                 keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
@@ -551,7 +591,14 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
         );
         // EIP-712 hashes an array of uint24 as its elements, each padded to 32 bytes (what encodePacked does to arrays)
         bytes32 structHash = keccak256(
-            abi.encode(VOUCHER_TYPEHASH, requestId, keccak256(abi.encodePacked(combos)), keccak256(bytes(jobId)), outputHash, deadline)
+            abi.encode(
+                VOUCHER_TYPEHASH,
+                requestId,
+                keccak256(abi.encodePacked(combos)),
+                keccak256(bytes(jobId)),
+                outputHash,
+                deadline
+            )
         );
         return keccak256(abi.encodePacked("\x19\x01", domain, structHash));
     }
@@ -573,11 +620,15 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
         uint256 from = r.revealed;
         if (combos.length != r.count || upTo <= from || upTo > r.count) revert BadRequest();
         if (block.timestamp > deadline) revert BadVoucher();
-        if (!SignatureChecker.isValidSignatureNow(relayer, voucherDigest(requestId, combos, jobId, outputHash, deadline), sig)) {
+        if (!SignatureChecker.isValidSignatureNow(
+                relayer, voucherDigest(requestId, combos, jobId, outputHash, deadline), sig
+            )) {
             revert BadVoucher();
         }
         bytes32 h;
-        for (uint256 i; i < from; ++i) h = keccak256(abi.encode(h, combos[i]));
+        for (uint256 i; i < from; ++i) {
+            h = keccak256(abi.encode(h, combos[i]));
+        }
         if (h != revealedHashOf[requestId]) revert BadVoucher(); // not the frens already revealed
         if (r.lowTier) openLowTier -= upTo - from;
         r.revealed = uint8(upTo);
@@ -590,20 +641,48 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
             if (valueOf(combo, CHARACTER) == 0 && pepe.minted + openLowTier >= pepe.cap) revert BadCombo(3);
             h = keccak256(abi.encode(h, combo));
             taken[combo] = true;
-            for (uint8 t; t < TRAITS; ++t) ++_rules[uint256(t) << 8 | valueOf(combo, t)].minted;
+            for (uint8 t; t < TRAITS; ++t) {
+                ++_rules[uint256(t) << 8 | valueOf(combo, t)].minted;
+            }
             uint256 tokenId = r.firstToken + i;
             comboOf[tokenId] = combo;
             seedOf[tokenId] = uint256(keccak256(abi.encode(outputHash, requestId, combo))) | 1;
             emit Revealed(requestId, tokenId, combo, jobId, outputHash);
         }
         revealedHashOf[requestId] = h;
-        if (upTo == r.count && r.jobs != 0) {
-            // jobs paid for that it didn't need (a retry paid while the last one landed): their $IMD feeds the floor
-            uint256 left = r.jobs * JOB_PRICE;
-            r.jobs = 0;
-            jobBudget -= left;
-            floorImd += left;
+        if (upTo == r.count) {
+            // a payment approved that IMD never took in time, and jobs paid for that it didn't need (a retry paid while
+            // the last one landed): their $IMD feeds the floor
+            _reclaimLapsed(r);
+            _jobsToFloor(r);
         }
+    }
+
+    /// @notice A request revealed in full whose last job payment IMD never took before its deadline (approved after
+    ///         the reveal landed, or lapsed since): the payment is undone and its 0.50 $IMD feeds the floor. Anyone.
+    function releaseLapsedJob(uint256 requestId) external nonReentrant {
+        Request storage r = requests[requestId];
+        if (r.revealed != r.count || !_reclaimLapsed(r)) revert BadJob();
+        _jobsToFloor(r);
+    }
+
+    /// @dev A payment approved and never taken that can't be any more (its deadline passed): undone, and its job money
+    ///      free again
+    function _reclaimLapsed(Request storage r) internal returns (bool) {
+        if (!r.jobApproved || _spent(r.jobNonce) || block.timestamp <= r.jobDeadline) return false;
+        _unapprove(r);
+        ++r.jobs;
+        jobBudget += JOB_PRICE;
+        return true;
+    }
+
+    /// @dev The jobs a finished request paid for and never needed: their $IMD feeds the floor
+    function _jobsToFloor(Request storage r) internal {
+        uint256 left = r.jobs * JOB_PRICE;
+        if (left == 0) return;
+        r.jobs = 0;
+        jobBudget -= left;
+        floorImd += left;
     }
 
     /// @notice Pays another job for a request whose frens aren't revealed yet (its last job didn't land): 0.50 $IMD,
@@ -641,12 +720,8 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
         Request storage r = requests[requestId];
         if (r.revealed == r.count) revert BadJob();
         if (deadline > block.timestamp + 1 hours || q.expiresAt > block.timestamp + 1 hours) revert BadJob();
-        if (r.jobApproved && !_spent(r.jobNonce)) {
-            if (block.timestamp <= r.jobDeadline) revert BadJob(); // the last payment can still be taken
-            _unapprove(r);
-            ++r.jobs;
-            jobBudget += JOB_PRICE;
-        }
+        // the last payment can still be taken, or it is undone and its job money used again
+        if (r.jobApproved && !_spent(r.jobNonce) && !_reclaimLapsed(r)) revert BadJob();
         if (r.jobs == 0) revert BadJob(); // the last job ran: another needs paying (retryJob)
         --r.jobs;
         r.jobApproved = true;
@@ -744,12 +819,18 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
         if (!_buyFloor(minOut)) revert Cap();
     }
 
-    function _buyFloor(uint256 minOut) internal returns (bool) {
-        // $IMD here beyond the books joins the floor: IMD refunds half of each job payment to its payer (this
-        // contract), and anyone may send some. The books: the floor's $IMD, the job money, the payments Permit2 may take
+    /// @dev $IMD here beyond the books, and the balance: IMD refunds half of each job payment to its payer (this
+    ///      contract), and anyone may send some. The books: the floor's $IMD, the job money, the payments Permit2 may take
+    function _unswept() internal view returns (uint256 extra, uint256 balance) {
+        balance = IERC20Min(imd).balanceOf(address(this));
         uint256 books = floorImd + jobBudget + IERC20Min(imd).allowance(address(this), permit2);
-        uint256 imdBefore = IERC20Min(imd).balanceOf(address(this));
-        if (imdBefore > books) floorImd += imdBefore - books;
+        if (balance > books) extra = balance - books;
+    }
+
+    function _buyFloor(uint256 minOut) internal returns (bool) {
+        // $IMD here beyond the books joins the floor (quote counts it already)
+        (uint256 extra, uint256 imdBefore) = _unswept();
+        floorImd += extra;
         uint256 imdIn = floorImd < maxImdPerBuy ? floorImd : maxImdPerBuy;
         if (imdIn == 0 || swapper == address(0) || block.number < lastFloorBuyBlock + buyDelayBlocks) return false;
         lastFloorBuyBlock = block.number;
@@ -759,7 +840,10 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
         // the swap failing for want of it
         if (gasleft() < FLOOR_BUY_GAS + 50_000) revert SwapShort();
         SafeTransferLib.safeApprove(imd, swapper, imdIn);
-        try IFrenSwapper(swapper).imdToImd6900{gas: FLOOR_BUY_GAS}(imdIn, minOut, address(this)) {} catch { return false; }
+        try IFrenSwapper(swapper).imdToImd6900{gas: FLOOR_BUY_GAS}(imdIn, minOut, address(this)) {}
+        catch {
+            return false;
+        }
         uint256 spent = imdBefore - IERC20Min(imd).balanceOf(address(this));
         floorImd -= spent;
         uint256 got = IERC20Min(imd6900).balanceOf(address(this)) - before;
@@ -821,7 +905,11 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
     }
 
     /// @notice Buys a fren from the treasury at twice the floor, both parts. All of it stays in the floor: it rises.
-    function buyTreasury(uint256 tokenId, uint256 maxPay, uint256 maxImd) external nonReentrant returns (uint256 paid, uint256 imdPaid) {
+    function buyTreasury(uint256 tokenId, uint256 maxPay, uint256 maxImd)
+        external
+        nonReentrant
+        returns (uint256 paid, uint256 imdPaid)
+    {
         if (ownerOf(tokenId) != address(this)) revert NotInTreasury();
         (paid, imdPaid) = floorPerFren();
         (paid, imdPaid) = (2 * paid, 2 * imdPaid);
@@ -873,7 +961,12 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
 
     /// @dev Every trade between holders goes past the validator. Mints and burns don't, and neither do the floor's own
     ///      moves (a fren recycled into the treasury, or bought out of it): no marketplace rule can block the floor.
+    ///      The last fren out in the world never enters the treasury (recycled or sent): with every fren in it the floor
+    ///      would have no owner, and the next mint, at the curve's price, would take all the fees that arrived meanwhile.
     function _beforeTokenTransfer(address from, address to, uint256 id) internal view override {
+        if (to == address(this) && from != address(0) && from != address(this) && totalMinted == inTreasury() + 1) {
+            revert LastFrenOut();
+        }
         if (from == address(0) || to == address(0) || from == address(this) || to == address(this)) return;
         address validator = getTransferValidator();
         // no validator, or none deployed on this chain (a test chain): nothing to apply, never a frozen collection
@@ -933,7 +1026,9 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
         onlyGovernor
     {
         for (uint256 i = 1; i < TIERS; ++i) {
-            if (imd_[i] < imd_[i - 1] || imd6900_[i] < imd6900_[i - 1] || identity_[i] < identity_[i - 1]) revert BadTraits();
+            if (imd_[i] < imd_[i - 1] || imd6900_[i] < imd6900_[i - 1] || identity_[i] < identity_[i - 1]) {
+                revert BadTraits();
+            }
         }
         imdTier = imd_;
         imd6900Tier = imd6900_;

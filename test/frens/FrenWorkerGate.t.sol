@@ -11,15 +11,21 @@ import {Ownable} from "solady/auth/Ownable.sol";
 /// @dev identity.md as the gate sees it: who holds each NFT
 contract MockIdentity {
     mapping(uint256 => address) public ownerOf;
+
     function give(address to, uint256 from, uint256 n) external {
-        for (uint256 i; i < n; ++i) ownerOf[from + i] = to;
+        for (uint256 i; i < n; ++i) {
+            ownerOf[from + i] = to;
+        }
     }
 }
 
 /// @dev IMD6900 as the gate sees it: its seat operator
 contract MockSeatStrategy {
     address public seatOperator;
-    constructor(address op) { seatOperator = op; }
+
+    constructor(address op) {
+        seatOperator = op;
+    }
 }
 
 /// @notice The workers' window: once the mint opens, its next 420 frens are identity.md holders' only, one per NFT.
@@ -45,8 +51,16 @@ contract FrenWorkerGateTest is Test, FrensRules {
         idmd = new MockToken("IDMD");
         swapper = new MockSwapper(imd6900, imd);
         frens = new IMD6900Frens(
-            timelock, address(imd), address(imd6900), address(idmd), address(new MockPermit2()), makeAddr("x402"), makeAddr("payTo"),
-            makeAddr("keeper"), makeAddr("relayer"), _flatPrices()
+            timelock,
+            address(imd),
+            address(imd6900),
+            address(idmd),
+            address(new MockPermit2()),
+            makeAddr("x402"),
+            makeAddr("payTo"),
+            makeAddr("keeper"),
+            makeAddr("relayer"),
+            _flatPrices()
         );
         vm.startPrank(timelock);
         _rules(frens, [uint16(1598), 312, 312]);
@@ -74,7 +88,9 @@ contract FrenWorkerGateTest is Test, FrensRules {
 
     function _ids(uint256 from, uint256 n) internal pure returns (uint256[] memory x) {
         x = new uint256[](n);
-        for (uint256 i; i < n; ++i) x[i] = from + i;
+        for (uint256 i; i < n; ++i) {
+            x[i] = from + i;
+        }
     }
 
     function test_WindowNeedsACreditPerFren() public {
@@ -173,12 +189,32 @@ contract FrenWorkerGateTest is Test, FrensRules {
         assertEq(frens.balanceOf(carol), 1);
     }
 
+    /// @dev The window is exactly 420: a request past what is left of it is refused, however many credits the minter holds
+    function test_WindowNeverOvershoots() public {
+        nfts.give(bob, 1000, 500);
+        vm.startPrank(bob);
+        gate.claim(_ids(1000, 500), bob);
+        for (uint256 i; i < 6; ++i) {
+            frens.requestMint(69, type(uint256).max);
+        }
+        assertEq(gate.workerMinted(), 414);
+        vm.expectRevert(abi.encodeWithSelector(FrenWorkerGate.WindowFull.selector, 6));
+        frens.requestMint(7, type(uint256).max);
+        assertEq(gate.credits(bob), 86, "nothing spent on a refused request");
+        frens.requestMint(6, type(uint256).max);
+        vm.stopPrank();
+        assertEq(gate.workerMinted(), 420);
+        assertFalse(gate.workerWindow());
+    }
+
     /// @dev 420 worker frens, then the window is over for good
     function test_WindowClosesAfter420() public {
         nfts.give(bob, 1000, 420);
         vm.startPrank(bob);
         gate.claim(_ids(1000, 420), bob);
-        for (uint256 i; i < 6; ++i) frens.requestMint(69, type(uint256).max);
+        for (uint256 i; i < 6; ++i) {
+            frens.requestMint(69, type(uint256).max);
+        }
         assertTrue(gate.workerWindow(), "414 so far");
         frens.requestMint(6, type(uint256).max);
         vm.stopPrank();
@@ -225,7 +261,10 @@ contract FrenWorkerGateTest is Test, FrensRules {
     }
 
     /// @dev A WL of carol (2) and dave (1): root and each one's proof
-    function _wl(uint256 carolAmount) internal returns (bytes32 root, bytes32[] memory carolProof, bytes32[] memory daveProof) {
+    function _wl(uint256 carolAmount)
+        internal
+        returns (bytes32 root, bytes32[] memory carolProof, bytes32[] memory daveProof)
+    {
         bytes32 c = _leaf(carol, carolAmount);
         bytes32 d = _leaf(makeAddr("dave"), 1);
         root = _pair(c, d);

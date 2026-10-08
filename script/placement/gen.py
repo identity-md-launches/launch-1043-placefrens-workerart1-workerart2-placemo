@@ -71,6 +71,10 @@ def mine(name, prefix, init_hex):
     if k:
         return k
     out = cast("create2", "--starts-with", prefix, "--deployer", CREATE2_DEPLOYER, "--init-code-hash", keccak(init_hex), "--threads", str(os.cpu_count()))
+    # newer cast prints the result as "address<TAB>salt" on stdout (the rest on stderr); older ones as "Address:" / "Salt:" lines
+    tsv = re.search(r"^(0x[0-9a-fA-F]{40})\s+(0x[0-9a-fA-F]{64})\s*$", out, re.M)
+    if tsv:
+        return tsv.group(2), tsv.group(1)
     salt = re.search(r"Salt:\s*(0x[0-9a-fA-F]{64})|Salt:\s*(\d+)", out)
     addr = re.search(r"Address:\s*(0x[0-9a-fA-F]{40})", out).group(1)
     s = salt.group(1) or "0x%064x" % int(salt.group(2))

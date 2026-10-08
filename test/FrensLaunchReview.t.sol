@@ -6,7 +6,8 @@ import {VmSafe} from "forge-std/Vm.sol";
 import {Ownable} from "solady/auth/Ownable.sol";
 import {FrensPlan} from "../src/FrensPlan.sol";
 import {FrensCode} from "../src/FrensCode.sol";
-import {PlaceFrens, PlaceModules} from "../src/FrensPlacement.sol";
+import {Placer, PlaceFrens, PlaceModules} from "../src/FrensPlacement.sol";
+import {WorkerArt1, WorkerArt2} from "../src/art/WorkerArt.sol";
 import {IMD6900Frens} from "../src/frens/IMD6900Frens.sol";
 import {FrenSwapper} from "../src/frens/FrenSwapper.sol";
 import {FrenMinter} from "../src/frens/FrenMinter.sol";
@@ -186,10 +187,11 @@ contract FrensSlot0Stub {
     }
 }
 
-/// @notice Reproductions, not claims of remediation. These exercise the exact placed
-///         collection and price table; only external assets/payments/swaps are mocked.
-///         ADAPTATION.md explains why the pinned source and addresses prevent fixes.
+/// @notice The audit's and the review's findings against the exact placed collection and price table (only external
+///         assets, payments and swaps are mocked): the ones fixed, asserted fixed; the trust assumptions that stay,
+///         asserted as they are. ADAPTATION.md lists each.
 contract FrensAuditReviewTest is FrensReviewBase, FrensRules {
+    PlaceFrens private pf;
     IMD6900Frens private frens;
     MockToken private imd;
     MockToken private reserveToken;
@@ -208,7 +210,7 @@ contract FrensAuditReviewTest is FrensReviewBase, FrensRules {
         vm.etch(address(reserveToken), address(new NoZeroToken()).code);
         vm.etch(FrensPlan.IDENTITY, address(new MockToken("identity")).code);
         vm.etch(address(permit2), address(new MockPermit2()).code);
-        PlaceFrens pf = PlaceFrens(deployCode("FrensPlacement.sol:PlaceFrens"));
+        pf = PlaceFrens(deployCode("FrensPlacement.sol:PlaceFrens"));
         frens = IMD6900Frens(payable(pf.frens()));
         assertEq(address(frens), FrensPlan.FRENS_AT);
         swapper = new MockSwapper(reserveToken, imd);
@@ -238,6 +240,7 @@ contract FrensAuditReviewTest is FrensReviewBase, FrensRules {
     /// @dev Audit 4def4296: both privileged roles can freeze peer transfers, including OTC.
     function test_Audit_OwnerOrGovernorCanBlockAllPeerTransfers() public {
         _mint(alice);
+        _mint(bob); // two out: alice's can be recycled at the end
         address governor = makeAddr("review governor");
         vm.prank(FrensPlan.OWNER);
         frens.setGovernor(governor);
@@ -276,12 +279,18 @@ contract FrensAuditReviewTest is FrensReviewBase, FrensRules {
         frens.requestMint(1, type(uint256).max);
     }
 
-    /// @dev Audit 992a6ec3: fees arriving after every holder recycles can be extracted by the next mint.
-    function test_Audit_EmptyWorldMintExtractsTheReserve() public {
+    /// @dev Audit 992a6ec3 / review 8e1b7913, fixed: the last fren out never enters the treasury, so the floor always
+    ///      has an owner. Fees arriving are that holder's, the next mint pays the floor it joins, and selling straight
+    ///      back to the floor never pays.
+    function test_Fix_LastFrenOutStaysOutSoFeesHaveAnOwner() public {
         _mint(alice);
         vm.prank(alice);
+        vm.expectRevert(IMD6900Frens.LastFrenOut.selector);
         frens.recycle(1);
-        assertEq(frens.totalMinted(), frens.inTreasury());
+        vm.prank(alice);
+        vm.expectRevert(IMD6900Frens.LastFrenOut.selector);
+        frens.transferFrom(alice, address(frens), 1);
+        assertEq(frens.totalMinted(), frens.inTreasury() + 1, "one out");
         vm.deal(address(this), 1 ether);
         (bool ok,) = address(frens).call{value: 1 ether}("");
         assertTrue(ok);
@@ -289,60 +298,59 @@ contract FrensAuditReviewTest is FrensReviewBase, FrensRules {
         frens.buyFloorWithEth(0.25 ether, 0);
         (uint256 floor6900, uint256 floorImd) = frens.floorPerFren();
         uint256 value = floor6900 * 1e18 / swapper.floorRate() + floorImd;
-        assertEq(value, 750e18);
-        assertEq(frens.quote(1), frens.priceOf(1));
-        assertLt(frens.quote(1), value);
+        assertGe(value, 750e18, "the fees are alice's fren's");
+        assertGe(frens.quote(1), value, "the next mint pays the floor it joins, not the curve");
         uint256 before = imd.balanceOf(bob);
         _mint(bob);
         uint256 paid = before - imd.balanceOf(bob);
         vm.prank(bob);
         (uint256 got6900, uint256 gotImd) = frens.recycle(2);
-        assertGt(got6900 * 1e18 / swapper.floorRate() + gotImd, paid);
-        assertGe(got6900, floor6900);
-        assertEq(frens.reserve(), 0);
-        assertEq(frens.floorImd(), 0);
-        vm.prank(bob);
-        (uint256 treasury6900, uint256 treasuryImd) = frens.buyTreasury(1, 0, 0);
-        assertEq(treasury6900 + treasuryImd, 0, "free only after the reserve was emptied");
-        assertEq(frens.ownerOf(1), bob);
+        assertLe(got6900 * 1e18 / swapper.floorRate() + gotImd, paid, "selling straight back never pays");
+        assertGt(frens.reserve(), 0, "the floor stays with alice's fren");
+        vm.prank(alice);
+        vm.expectRevert(IMD6900Frens.LastFrenOut.selector);
+        frens.recycle(1);
     }
 
-    /// @dev Audit 0640f0a6: the expired approval remains in the books after a complete reveal.
-    function test_Audit_ExpiredJobApprovalRemainsAfterFullReveal() public {
+    /// @dev Audit 0640f0a6 / review aed78db6, fixed: a payment approved and never taken in time is undone by the
+    ///      reveal that completes the request, and its 0.50 $IMD feeds the floor
+    function test_Fix_LapsedJobApprovalIsReleasedByTheReveal() public {
         uint256 id = _mint(alice);
         uint256 expiry = vm.getBlockTimestamp() + 600;
         IMD6900Frens.Quote memory q =
             IMD6900Frens.Quote("review", bytes32("scope"), "1", bytes32("q"), bytes32("p"), "job.open", expiry);
         vm.prank(FrensPlan.KEEPER);
         (bytes32 digest,) = frens.approveJob(id, 42, expiry, q);
+        assertEq(imd.allowance(address(frens), address(permit2)), 0.5e18);
         vm.warp(expiry + 1);
         uint24[] memory combos = new uint24[](1);
         combos[0] = _combo(PEPE, 1, 0, 0, 0, 0, 0, 0);
         uint256 deadline = vm.getBlockTimestamp() + 600;
         bytes32 hash = frens.voucherDigest(id, combos, "review", bytes32("out"), deadline);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(RELAYER_KEY, hash);
+        uint256 waiting = frens.floorImd();
         frens.reveal(id, combos, "review", bytes32("out"), deadline, abi.encodePacked(r, s, v), 1);
         assertGt(frens.seedOf(1), 0);
-        q.expiresAt = deadline;
-        vm.prank(FrensPlan.KEEPER);
-        vm.expectRevert(IMD6900Frens.BadJob.selector);
-        frens.approveJob(id, 43, deadline, q);
         assertEq(permit2.nonceBitmap(address(frens), 0), 0, "payment was never taken");
-        assertEq(imd.allowance(address(frens), address(permit2)), 0.5e18);
-        assertEq(imd.balanceOf(address(frens)) - frens.floorImd() - frens.jobBudget(), 0.5e18);
-        assertEq(frens.isValidSignature(digest, ""), bytes4(0x1626ba7e));
+        assertEq(
+            imd.allowance(address(frens), address(permit2)), 0, "no payment stays approved after a complete reveal"
+        );
+        assertEq(frens.isValidSignature(digest, ""), bytes4(0xffffffff));
+        assertEq(frens.floorImd(), waiting + 0.5e18, "its 0.50 is the floor's");
+        assertEq(imd.balanceOf(address(frens)), frens.floorImd() + frens.jobBudget(), "the books add up");
         vm.roll(vm.getBlockNumber() + 1);
-        vm.expectRevert(IMD6900Frens.Cap.selector);
-        frens.buyFloor(0);
+        frens.buyFloor(0); // and the floor buys it in
+        assertEq(frens.floorImd(), 0);
     }
 
-    /// @dev Audit ca830bfe: the exact planned swapper can be pre-placed with a skewed average.
-    function test_Audit_LaunchAcceptsSwapperSeededAtManipulatedSpot() public {
-        _mint(alice); // Give quote() a real reserve and one holder before installing the pool stub.
-        FrensSlot0Stub pool = new FrensSlot0Stub();
+    function _skewedPool(uint160 price) internal returns (FrensSlot0Stub pool) {
+        pool = new FrensSlot0Stub();
         vm.etch(FrensPlan.POOL_MANAGER, address(pool).code);
         pool = FrensSlot0Stub(FrensPlan.POOL_MANAGER);
-        pool.setPrice(uint160((uint256(1) << 96) / 26));
+        pool.setPrice(price);
+    }
+
+    function _prePlaceSwapper() internal returns (FrenSwapper placed) {
         bytes memory init = abi.encodePacked(
             FrensCode.SWAPPER,
             abi.encode(
@@ -357,23 +365,79 @@ contract FrensAuditReviewTest is FrensReviewBase, FrensRules {
         vm.prank(bob);
         (bool ok,) = FrensPlan.CREATE2_DEPLOYER.call(abi.encodePacked(FrensPlan.SWAPPER_SALT, init));
         assertTrue(ok);
-        FrenSwapper placed = FrenSwapper(payable(FrensPlan.SWAPPER_AT));
-        uint256 seeded = placed.rateAverage();
-        assertApproxEqAbs(seeded, 676e18, 1);
-        uint256 seededAt = placed.averagedAt();
-        pool.setPrice(uint160((uint256(1) << 96) / 265));
+        placed = FrenSwapper(payable(FrensPlan.SWAPPER_AT));
+    }
+
+    /// @dev Audit ca830bfe / review 1796fede, fixed in the launch: the exact swapper pre-placed in a block whose pool
+    ///      price was pushed carries that price as its average; PlaceModules leaves it where it is and creates its own
+    ///      (seeded at the launch block's price) instead of wiring the frens to value their floor off it. A plain
+    ///      CREATE from PlaceModules: nobody can have put a swapper there first, so the launch can't be griefed into
+    ///      failing by pre-placing one.
+    function test_Fix_LaunchReplacesASwapperSeededOffASkewedPrice() public {
+        _mint(alice); // a reserve for quote() to value
+        FrensSlot0Stub pool = _skewedPool(uint160((uint256(1) << 96) / 26)); // IMD6900 100x dearer, for one block
+        FrenSwapper placed = _prePlaceSwapper();
+        assertApproxEqAbs(placed.rateAverage(), 676e18, 1);
+        pool.setPrice(uint160((uint256(1) << 96) / 265)); // the price is back: about 70,225
         vm.roll(vm.getBlockNumber() + 1);
-        FrensReviewFactory factory = new FrensReviewFactory();
-        (, PlaceModules pm) = _launch(factory);
+        assertGt(placed.spotRate(), 100 * placed.floorRate(), "the pre-placed swapper values IMD6900 100x off");
+        PlaceModules pm = new PlaceModules(pf, address(new WorkerArt1()), address(new WorkerArt2()));
+        FrenSwapper own = FrenSwapper(payable(pm.swapper()));
+        assertTrue(address(own) != FrensPlan.SWAPPER_AT, "not the skewed one");
+        assertEq(address(own), vm.computeCreateAddress(address(pm), 1), "the launch's own, from PlaceModules itself");
+        assertEq(own.frens(), address(frens));
+        assertEq(own.averagedAt(), vm.getBlockNumber());
+        assertEq(own.rateAverage(), own.spotRate(), "seeded at the launch block's price");
+        assertGe(own.floorRate() * 2, own.spotRate(), "the launch's swapper prices IMD6900 at the pool's price");
+        assertApproxEqAbs(placed.rateAverage(), 676e18, 1, "the skewed one is left alone, wired to nothing");
+        // the frens wired to it value the floor at the pool's price (here under the curve: the curve's price)
+        vm.prank(FrensPlan.OWNER);
+        frens.setModules(address(own), address(0));
+        assertEq(frens.quote(1), frens.priceOf(frens.totalMinted()));
+        vm.prank(FrensPlan.OWNER);
+        frens.setModules(address(placed), address(0)); // wired to the skewed one, the floor would count 100x over
+        assertEq(frens.quote(1), frens.reserve() * 1e18 / placed.floorRate());
+        assertGt(frens.quote(1), 20 * frens.priceOf(frens.totalMinted()));
+    }
+
+    /// @dev The same swapper pre-placed at the pool's price (within 2x of it at the launch) is the one the launch takes
+    function test_Fix_LaunchAdoptsASwapperSeededAtThePoolsPrice() public {
+        FrensSlot0Stub pool = _skewedPool(uint160((uint256(1) << 96) / 265));
+        FrenSwapper placed = _prePlaceSwapper();
+        uint256 seeded = placed.rateAverage();
+        assertApproxEqAbs(seeded, 70_225e18, 1e18);
+        pool.setPrice(uint160((uint256(1) << 96) / 200)); // drifted since: 40,000, within 2x
+        vm.roll(vm.getBlockNumber() + 1);
+        PlaceModules pm = new PlaceModules(pf, address(new WorkerArt1()), address(new WorkerArt2()));
         assertEq(pm.swapper(), address(placed));
         assertEq(placed.rateAverage(), seeded);
-        assertEq(placed.averagedAt(), seededAt);
-        assertEq(placed.floorRate(), seeded);
-        assertGt(placed.spotRate(), 100 * placed.floorRate());
-        vm.prank(FrensPlan.OWNER);
-        frens.setModules(address(placed), address(0));
-        uint256 normalFloor = frens.reserve() * 1e18 / placed.spotRate();
-        assertEq(frens.quote(1), frens.reserve() * 1e18 / seeded);
-        assertGt(frens.quote(1), 100 * normalFloor);
+        assertEq(placed.spotRate(), 40_000e18);
+    }
+
+    /// @dev The swapper the launch creates itself starts at the pool's price of its own block: always within the band
+    function test_Fix_LaunchsOwnSwapperStartsAtThePoolsPrice() public {
+        _skewedPool(uint160((uint256(1) << 96) / 265));
+        PlaceModules pm = new PlaceModules(pf, address(new WorkerArt1()), address(new WorkerArt2()));
+        FrenSwapper s = FrenSwapper(payable(pm.swapper()));
+        assertEq(address(s), FrensPlan.SWAPPER_AT);
+        assertEq(s.averagedAt(), vm.getBlockNumber());
+        assertEq(s.rateAverage(), s.spotRate(), "seeded at the price of the launch's block");
+        assertEq(s.floorRate(), s.spotRate());
+    }
+
+    /// @dev Review 301734e0, fixed in the launch: the renderer draws only the exact chunks WorkerArtIndex was generated
+    ///      from; PlaceModules refuses any other art (the two the other way round included) instead of placing a
+    ///      renderer that draws nothing
+    function test_Fix_LaunchRefusesTheWrongArt() public {
+        address a1 = address(new WorkerArt1());
+        address a2 = address(new WorkerArt2());
+        vm.expectRevert(Placer.PlaceFailed.selector);
+        new PlaceModules(pf, a2, a1);
+        vm.expectRevert(Placer.PlaceFailed.selector);
+        new PlaceModules(pf, a1, address(pf));
+        vm.expectRevert(Placer.PlaceFailed.selector);
+        new PlaceModules(pf, a1, makeAddr("no code"));
+        PlaceModules pm = new PlaceModules(pf, a1, a2);
+        assertEq(WorkerFrensRenderer(pm.renderer()).art1(), a1);
     }
 }

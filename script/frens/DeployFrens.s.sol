@@ -14,7 +14,15 @@ interface IERC20Min {
 }
 
 interface IPlacedModules {
+    function frens() external view returns (address);
+    function swapper() external view returns (address);
+    function minter() external view returns (address);
+    function gate() external view returns (address);
     function renderer() external view returns (address);
+}
+
+interface IStrategyMin {
+    function isDistributor(address) external view returns (bool);
 }
 
 /// @notice The frens after the IMD swarm has deployed them (src/FrensPlacement.sol, at FrensPlan's addresses): the team
@@ -48,28 +56,53 @@ contract DeployFrens is Script {
 
     /// @notice After the swarm's launch, from the team wallet (the frens' owner and governor): the launch's renderer,
     ///         the swapper and the workers' window, the launch's trait rules, sealed. Reads where the launch put them:
-    ///         the renderer from its PlaceModules (MODULES in the env), or RENDERER.
+    ///         the renderer from its PlaceModules (MODULES in the env), or RENDERER. Until the Ethereum timelock's batch
+    ///         makes the frens an IMD6900 distributor, the floor's buys are paused (the floor waits in $IMD): IMD6900
+    ///         bought before that could never be paid out, and every recycle and treasury buy would fail on it. {resume}
+    ///         turns the buys back on once the batch has landed.
     function setup() external {
         (address frens, address swapper,, address gate) = placed();
         address renderer = vm.envOr("RENDERER", address(0));
         if (renderer == address(0)) renderer = IPlacedModules(vm.envAddress("MODULES")).renderer();
         require(renderer.code.length != 0, "no renderer placed");
+        IMD6900Frens f = IMD6900Frens(payable(frens));
+        bool paused = !IStrategyMin(IMD6900).isDistributor(frens);
         vm.startBroadcast(DEPLOYER);
-        IMD6900Frens(payable(frens)).setRenderer(renderer);
-        IMD6900Frens(payable(frens)).setModules(swapper, gate);
-        launchRules(IMD6900Frens(payable(frens)));
-        IMD6900Frens(payable(frens)).sealTraits();
+        f.setRenderer(renderer);
+        if (paused) f.setParams(f.buyDelayBlocks(), 0, 0);
+        f.setModules(swapper, gate);
+        launchRules(f);
+        f.sealTraits();
         vm.stopBroadcast();
         console2.log("frens", frens, "set up, sealed, drawn by", renderer);
+        if (paused) console2.log("floor buys paused until the timelock's batch (FrensTimelockBatch); then resume()");
     }
 
-    /// @notice Where src/FrensPlacement.sol puts them (FrensPlan; FRENS / SWAPPER / MINTER / GATE in the env override it)
+    /// @notice Once the timelock's batch has made the frens an IMD6900 distributor: the floor's buys back on, at the
+    ///         collection's defaults (50 $IMD and 0.25 ETH a buy, one buy a block)
+    function resume() external {
+        (address frens,,,) = placed();
+        require(IStrategyMin(IMD6900).isDistributor(frens), "not an IMD6900 distributor yet: the batch hasn't landed");
+        vm.broadcast(DEPLOYER);
+        IMD6900Frens(payable(frens)).setParams(1, 50e18, 0.25 ether);
+        console2.log("frens", frens, "floor buys resumed");
+    }
+
+    /// @notice Where src/FrensPlacement.sol put them: read from the launch's PlaceModules (MODULES in the env), which
+    ///         knows its swapper even where it had to create its own instead of the one at FrensPlan.SWAPPER_AT; else
+    ///         FrensPlan's addresses. FRENS / SWAPPER / MINTER / GATE in the env override either.
     function placed() public view returns (address frens, address swapper, address minter, address gate) {
-        frens = vm.envOr("FRENS", FrensPlan.FRENS_AT);
-        swapper = vm.envOr("SWAPPER", FrensPlan.SWAPPER_AT);
-        minter = vm.envOr("MINTER", FrensPlan.MINTER_AT);
-        gate = vm.envOr("GATE", FrensPlan.GATE_AT);
-        require(frens.code.length != 0 && swapper.code.length != 0 && minter.code.length != 0 && gate.code.length != 0, "not placed");
+        address modules = vm.envOr("MODULES", address(0));
+        IPlacedModules pm = IPlacedModules(modules);
+        bool fromLaunch = modules.code.length != 0;
+        frens = vm.envOr("FRENS", fromLaunch ? pm.frens() : FrensPlan.FRENS_AT);
+        swapper = vm.envOr("SWAPPER", fromLaunch ? pm.swapper() : FrensPlan.SWAPPER_AT);
+        minter = vm.envOr("MINTER", fromLaunch ? pm.minter() : FrensPlan.MINTER_AT);
+        gate = vm.envOr("GATE", fromLaunch ? pm.gate() : FrensPlan.GATE_AT);
+        require(
+            frens.code.length != 0 && swapper.code.length != 0 && minter.code.length != 0 && gate.code.length != 0,
+            "not placed"
+        );
     }
 
     /// @notice The curve's first `count` frens to IMD6900 (its seats hold identity.md NFTs), 69 a request, paid with
@@ -77,7 +110,9 @@ contract DeployFrens is Script {
     function firstFrens(IMD6900Frens frens, FrenMinter minter, uint256 count, uint256 ethIn) external {
         require(!frens.mintOpen(), "before the opening only");
         uint256 cost;
-        for (uint256 n = frens.totalMinted(); n < frens.totalMinted() + count; ++n) cost += frens.priceOf(n);
+        for (uint256 n = frens.totalMinted(); n < frens.totalMinted() + count; ++n) {
+            cost += frens.priceOf(n);
+        }
         cost += cost / 100; // the floor rule can lift a later request a little above the curve
         vm.startBroadcast(DEPLOYER);
         minter.buyImd{value: ethIn}(cost);
@@ -102,7 +137,8 @@ contract DeployFrens is Script {
     /// @dev Every contract with plain deploys, from the caller (the tests), set up and sealed the same way
     function deploy(address owner, address keeper, address relayer) public returns (Deployed memory d) {
         d.prices = address(new FrenPrices());
-        d.frens = new IMD6900Frens(owner, IMD, IMD6900, IDENTITY, PERMIT2, X402_PROXY, IMD_PAY_TO, keeper, relayer, d.prices);
+        d.frens =
+            new IMD6900Frens(owner, IMD, IMD6900, IDENTITY, PERMIT2, X402_PROXY, IMD_PAY_TO, keeper, relayer, d.prices);
         d.swapper = new FrenSwapper(POOL_MANAGER, IMD, IMD6900, address(d.frens), PAIR_HOOK, POOL4_HOOK);
         d.minter = new FrenMinter(POOL_MANAGER, address(d.frens), POOL4_HOOK, PAIR_HOOK);
         d.gate = new FrenWorkerGate(owner, address(d.frens), IDENTITY, IMD6900);
@@ -138,7 +174,9 @@ contract DeployFrens is Script {
         f.setTraitRules(6, c, t);
         (c, t) = _fill(16, 140, 1);
         (c[0], t[0]) = (2222, 0);
-        for (uint256 i; i < 6; ++i) t[[1, 3, 4, 10, 11, 14][i]] = 0;
+        for (uint256 i; i < 6; ++i) {
+            t[[1, 3, 4, 10, 11, 14][i]] = 0;
+        }
         (c[12], t[12], c[13], t[13]) = (56, 3, 56, 3);
         f.setTraitRules(7, c, t);
         f.addPairRule(IMD6900Frens.PairRule(0, 1, 3, 2, 3));
@@ -148,6 +186,8 @@ contract DeployFrens is Script {
     function _fill(uint8 n, uint16 cap, uint8 tier) internal pure returns (uint16[] memory caps, uint8[] memory tiers) {
         caps = new uint16[](n);
         tiers = new uint8[](n);
-        for (uint8 i; i < n; ++i) (caps[i], tiers[i]) = (cap, tier);
+        for (uint8 i; i < n; ++i) {
+            (caps[i], tiers[i]) = (cap, tier);
+        }
     }
 }

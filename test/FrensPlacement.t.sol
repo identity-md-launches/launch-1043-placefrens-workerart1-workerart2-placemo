@@ -78,15 +78,27 @@ contract FrensPlacementTest is Test {
     }
 
     function _create2(bytes32 salt, bytes memory init) internal pure returns (address) {
-        return address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), FrensPlan.CREATE2_DEPLOYER, salt, keccak256(init))))));
+        return address(
+            uint160(
+                uint256(keccak256(abi.encodePacked(bytes1(0xff), FrensPlan.CREATE2_DEPLOYER, salt, keccak256(init))))
+            )
+        );
     }
 
     function _frensInit(address prices) internal pure returns (bytes memory) {
         return abi.encodePacked(
             FrensCode.FRENS,
             abi.encode(
-                FrensPlan.OWNER, FrensPlan.IMD, FrensPlan.IMD6900, FrensPlan.IDENTITY, FrensPlan.PERMIT2, FrensPlan.X402_PROXY,
-                FrensPlan.IMD_PAY_TO, FrensPlan.KEEPER, FrensPlan.RELAYER, prices
+                FrensPlan.OWNER,
+                FrensPlan.IMD,
+                FrensPlan.IMD6900,
+                FrensPlan.IDENTITY,
+                FrensPlan.PERMIT2,
+                FrensPlan.X402_PROXY,
+                FrensPlan.IMD_PAY_TO,
+                FrensPlan.KEEPER,
+                FrensPlan.RELAYER,
+                prices
             )
         );
     }
@@ -99,18 +111,29 @@ contract FrensPlacementTest is Test {
         assertEq(keccak256(FrensCode.SWAPPER), keccak256(type(FrenSwapper).creationCode), "FrenSwapper");
         assertEq(keccak256(FrensCode.MINTER), keccak256(type(FrenMinter).creationCode), "FrenMinter");
         assertEq(keccak256(FrensCode.GATE), keccak256(type(FrenWorkerGate).creationCode), "FrenWorkerGate");
-        assertEq(keccak256(FrensCode.RENDERER), keccak256(type(WorkerFrensRenderer).creationCode), "WorkerFrensRenderer");
+        assertEq(
+            keccak256(FrensCode.RENDERER), keccak256(type(WorkerFrensRenderer).creationCode), "WorkerFrensRenderer"
+        );
     }
 
     function test_PlanFollowsFromTheCode() public pure {
         assertEq(FrensPlan.PRICES_AT, _create2(FrensPlan.PRICES_SALT, FrensCode.PRICES), "prices");
         assertEq(FrensPlan.FRENS_AT, _create2(FrensPlan.FRENS_SALT, _frensInit(FrensPlan.PRICES_AT)), "frens");
         address f = FrensPlan.FRENS_AT;
-        bytes memory swapperArgs =
-            abi.encode(FrensPlan.POOL_MANAGER, FrensPlan.IMD, FrensPlan.IMD6900, f, FrensPlan.PAIR_HOOK, FrensPlan.POOL4_HOOK);
-        assertEq(FrensPlan.SWAPPER_AT, _create2(FrensPlan.SWAPPER_SALT, abi.encodePacked(FrensCode.SWAPPER, swapperArgs)), "swapper");
+        bytes memory swapperArgs = abi.encode(
+            FrensPlan.POOL_MANAGER, FrensPlan.IMD, FrensPlan.IMD6900, f, FrensPlan.PAIR_HOOK, FrensPlan.POOL4_HOOK
+        );
+        assertEq(
+            FrensPlan.SWAPPER_AT,
+            _create2(FrensPlan.SWAPPER_SALT, abi.encodePacked(FrensCode.SWAPPER, swapperArgs)),
+            "swapper"
+        );
         bytes memory minterArgs = abi.encode(FrensPlan.POOL_MANAGER, f, FrensPlan.POOL4_HOOK, FrensPlan.PAIR_HOOK);
-        assertEq(FrensPlan.MINTER_AT, _create2(FrensPlan.MINTER_SALT, abi.encodePacked(FrensCode.MINTER, minterArgs)), "minter");
+        assertEq(
+            FrensPlan.MINTER_AT,
+            _create2(FrensPlan.MINTER_SALT, abi.encodePacked(FrensCode.MINTER, minterArgs)),
+            "minter"
+        );
         bytes memory gateArgs = abi.encode(FrensPlan.OWNER, f, FrensPlan.IDENTITY, FrensPlan.IMD6900);
         assertEq(FrensPlan.GATE_AT, _create2(FrensPlan.GATE_SALT, abi.encodePacked(FrensCode.GATE, gateArgs)), "gate");
         assertEq(uint160(FrensPlan.FRENS_AT) >> 144, 0x6900, "the frens start 0x6900");
@@ -127,8 +150,10 @@ contract FrensPlacementTest is Test {
         assertEq(code, abi.encodePacked(hex"00", swarm), "the code: a STOP, then prices-swarm.bin");
         uint256 nudged;
         for (uint256 n; n < 2222; ++n) {
-            uint256 a = uint256(uint8(curve[3 * n])) << 16 | uint256(uint8(curve[3 * n + 1])) << 8 | uint8(curve[3 * n + 2]);
-            uint256 b = uint256(uint8(swarm[3 * n])) << 16 | uint256(uint8(swarm[3 * n + 1])) << 8 | uint8(swarm[3 * n + 2]);
+            uint256 a =
+                uint256(uint8(curve[3 * n])) << 16 | uint256(uint8(curve[3 * n + 1])) << 8 | uint8(curve[3 * n + 2]);
+            uint256 b =
+                uint256(uint8(swarm[3 * n])) << 16 | uint256(uint8(swarm[3 * n + 1])) << 8 | uint8(swarm[3 * n + 2]);
             if (a != b) {
                 assertEq(b, a + 1, "one unit up");
                 ++nudged;
@@ -211,7 +236,8 @@ contract FrensPlacementTest is Test {
         assertEq(pf.prices().code.length, 1 + 3 * 2222, "the price table is the contract's code");
         bytes memory table = pf.prices().code;
         for (uint256 n; n < 2222; n += 101) {
-            uint256 units = uint256(uint8(table[1 + 3 * n])) << 16 | uint256(uint8(table[2 + 3 * n])) << 8 | uint8(table[3 + 3 * n]);
+            uint256 units = uint256(uint8(table[1 + 3 * n])) << 16 | uint256(uint8(table[2 + 3 * n])) << 8
+                | uint8(table[3 + 3 * n]);
             assertEq(f.priceOf(n), units * 1e14, "its prices are the table's");
         }
         assertEq(f.priceOf(0), 0.6901e18, "the curve's first price");
@@ -234,7 +260,11 @@ contract FrensPlacementTest is Test {
         assertGt(WorkerFrensRenderer(pm.renderer()).art2().code.length, 0);
         assertEq(f.name(), "Worker Frens");
         assertEq(f.symbol(), "wFREN");
-        assertEq(f.imdPayTo(), 0xC94400e90bB652AFA02740bFf50824E14069c133, "every mint's job money pays the relayer's payer back");
+        assertEq(
+            f.imdPayTo(),
+            0xC94400e90bB652AFA02740bFf50824E14069c133,
+            "every mint's job money pays the relayer's payer back"
+        );
         assertEq(pm.frens(), address(f));
     }
 
@@ -307,15 +337,35 @@ contract FrensPlacementTest is Test {
         assertEq(r.entry(WorkerArtIndex.COAT), vm.readFileBinary(string.concat(d, "layers/coat.bin")), "the coat");
         assertEq(r.entry(WorkerArtIndex.ITEM0 + 5), vm.readFileBinary(string.concat(d, "layers/item5.bin")), "item06");
         for (uint256 b; b < 12; ++b) {
-            assertEq(r.entry(WorkerArtIndex.BG0 + b), vm.readFileBinary(string.concat(d, "layers/bg", vm.toString(b), ".bin")), "a background");
+            assertEq(
+                r.entry(WorkerArtIndex.BG0 + b),
+                vm.readFileBinary(string.concat(d, "layers/bg", vm.toString(b), ".bin")),
+                "a background"
+            );
         }
-        assertEq(r.entry(WorkerArtIndex.PALETTE), vm.readFileBinary(string.concat(d, "shared.bin")), "the shared palette");
+        assertEq(
+            r.entry(WorkerArtIndex.PALETTE), vm.readFileBinary(string.concat(d, "shared.bin")), "the shared palette"
+        );
         string[12] memory pals = [
-            "cleanlab_blue", "cleanlab_green", "cleanlab_red", "messylab_blue", "messylab_green", "messylab_red",
-            "tubeblue", "tubegreen", "tubered", "tubeyellow", "wireframe_green", "wireframe_red"
+            "cleanlab_blue",
+            "cleanlab_green",
+            "cleanlab_red",
+            "messylab_blue",
+            "messylab_green",
+            "messylab_red",
+            "tubeblue",
+            "tubegreen",
+            "tubered",
+            "tubeyellow",
+            "wireframe_green",
+            "wireframe_red"
         ];
         for (uint256 b; b < 12; ++b) {
-            assertEq(r.entry(WorkerArtIndex.BGPAL0 + b), vm.readFileBinary(string.concat(d, "bgpal/", pals[b], ".bin")), "its palette");
+            assertEq(
+                r.entry(WorkerArtIndex.BGPAL0 + b),
+                vm.readFileBinary(string.concat(d, "bgpal/", pals[b], ".bin")),
+                "its palette"
+            );
         }
         assertEq(WorkerArtIndex.TABLES, vm.readFileBinary(string.concat(d, "tables.bin")), "the tables");
         vm.expectRevert(WorkerFrensRenderer.Missing.selector);
@@ -358,7 +408,9 @@ contract FrensPlacementTest is Test {
 
     function _cut(bytes memory b, uint256 s, uint256 n) internal pure returns (bytes memory out) {
         out = new bytes(n);
-        for (uint256 i; i < n; ++i) out[i] = b[s + i];
+        for (uint256 i; i < n; ++i) {
+            out[i] = b[s + i];
+        }
     }
 
     /// @dev IMD reads code as instructions (PUSH data skipped) and refuses CALLCODE, DELEGATECALL and SELFDESTRUCT
@@ -447,10 +499,14 @@ contract FrensPlacementForkTest is Test, FrensRules {
     function test_fork_DrawsEveryLayer() public view {
         WorkerFrensRenderer r = WorkerFrensRenderer(pm.renderer());
         for (uint256 i; i < 16; ++i) {
-            uint24 combo = uint24((i % 3) | (i % 13) << 2 | (i % 4) << 6 | (i % 3) << 8 | (i % 6) << 10 | (i % 12) << 15 | i << 19);
+            uint24 combo = uint24(
+                (i % 3) | (i % 13) << 2 | (i % 4) << 6 | (i % 3) << 8 | (i % 6) << 10 | (i % 12) << 15 | i << 19
+            );
             assertEq(r.bmp(combo, i * 7919).length, 54 + 1024 + 84 * 84);
         }
-        for (uint256 h = 1; h < 3; ++h) assertEq(r.canvas(uint24(h << 13), 1).length, 84 * 84);
+        for (uint256 h = 1; h < 3; ++h) {
+            assertEq(r.canvas(uint24(h << 13), 1).length, 84 * 84);
+        }
         assertEq(r.palette(11).length, 1024);
     }
 
@@ -460,10 +516,24 @@ contract FrensPlacementForkTest is Test, FrensRules {
         assertEq(frens.swapper(), pm.swapper());
         assertEq(frens.workerGate(), address(gate));
         assertTrue(frens.traitsSealed());
+        // a new address: not an IMD6900 distributor until the timelock's batch, so setup() paused the floor's buys
+        assertFalse(ITransferRule(s.IMD6900()).isDistributor(address(frens)));
+        assertEq(frens.maxImdPerBuy(), 0, "floor buys paused until the batch");
+        assertEq(frens.maxEthPerBuy(), 0);
+        vm.expectRevert(bytes("not an IMD6900 distributor yet: the batch hasn't landed"));
+        s.resume();
         // the launch rules, as the other tests set them
         IMD6900Frens ref = new IMD6900Frens(
-            address(this), s.IMD(), s.IMD6900(), s.IDENTITY(), s.PERMIT2(), s.X402_PROXY(), s.IMD_PAY_TO(), s.KEEPER(),
-            s.RELAYER(), pf.prices()
+            address(this),
+            s.IMD(),
+            s.IMD6900(),
+            s.IDENTITY(),
+            s.PERMIT2(),
+            s.X402_PROXY(),
+            s.IMD_PAY_TO(),
+            s.KEEPER(),
+            s.RELAYER(),
+            pf.prices()
         );
         _rules(ref, [uint16(1598), 312, 312]);
         for (uint8 t; t < 8; ++t) {
@@ -480,8 +550,7 @@ contract FrensPlacementForkTest is Test, FrensRules {
     function test_fork_TheWholeRoad() public {
         s.setup();
         assertFalse(ITransferRule(s.IMD6900()).isDistributor(address(frens)), "no whitelist yet");
-        vm.prank(OWNER);
-        frens.setParams(1, 0, 0); // floor buys paused until the batch
+        assertEq(frens.maxImdPerBuy() + frens.maxEthPerBuy(), 0, "setup paused the floor's buys until the batch");
 
         // the curve's first frens to IMD6900, paid in ETH (FrenMinter buys their $IMD on POOL4)
         uint256 ethBefore = OWNER.balance;
@@ -520,7 +589,8 @@ contract FrensPlacementForkTest is Test, FrensRules {
         uint24[] memory combos = new uint24[](2);
         (combos[0], combos[1]) = (_combo(PEPE, 1, 1, 0, 1, 0, 3, 1), _combo(MUMU, 2, 0, 1, 2, 0, 7, 3)); // tier 2's
         uint256 deadline = block.timestamp + 1 hours;
-        (uint8 v, bytes32 r, bytes32 s_) = vm.sign(relayerKey, frens.voucherDigest(id, combos, "job-1", keccak256("out"), deadline));
+        (uint8 v, bytes32 r, bytes32 s_) =
+            vm.sign(relayerKey, frens.voucherDigest(id, combos, "job-1", keccak256("out"), deadline));
         frens.reveal(id, combos, "job-1", keccak256("out"), deadline, abi.encodePacked(r, s_, v), 2);
         assertEq(frens.comboOf(7), combos[0]);
         // revealed: its own drawing, under the new name
@@ -542,8 +612,8 @@ contract FrensPlacementForkTest is Test, FrensRules {
             (bool ok,) = targets[i].call(datas[i]);
             assertTrue(ok, "a batch call failed");
         }
-        vm.prank(OWNER);
-        frens.setParams(1, 50e18, 0.5 ether);
+        s.resume();
+        assertEq(frens.maxImdPerBuy(), 50e18, "the floor's buys are back on");
         vm.roll(block.number + 2);
         frens.buyFloor(0);
         assertGt(frens.reserve(), 0, "now in IMD6900");
@@ -573,19 +643,25 @@ contract FrensPlacementForkTest is Test, FrensRules {
         uint256 from = _find(svg, key, 0) + key.length;
         uint256 e = _find(svg, bytes('"'), from);
         bytes memory b64 = new bytes(e - from);
-        for (uint256 i; i < b64.length; ++i) b64[i] = svg[from + i];
+        for (uint256 i; i < b64.length; ++i) {
+            b64[i] = svg[from + i];
+        }
         return Base64.decode(string(b64));
     }
 
     function _from(bytes memory b, uint256 at) internal pure returns (bytes memory out) {
         out = new bytes(b.length - at);
-        for (uint256 i; i < out.length; ++i) out[i] = b[at + i];
+        for (uint256 i; i < out.length; ++i) {
+            out[i] = b[at + i];
+        }
     }
 
     function _json(string memory uri) internal pure returns (string memory) {
         bytes memory u = bytes(uri);
         bytes memory b64 = new bytes(u.length - 29);
-        for (uint256 i; i < b64.length; ++i) b64[i] = u[29 + i];
+        for (uint256 i; i < b64.length; ++i) {
+            b64[i] = u[29 + i];
+        }
         return string(Base64.decode(string(b64)));
     }
 
@@ -596,7 +672,9 @@ contract FrensPlacementForkTest is Test, FrensRules {
         uint256 s = _find(j, key, 0) + key.length;
         uint256 e = _find(j, bytes('"'), s);
         bytes memory out = new bytes(e - s);
-        for (uint256 i; i < out.length; ++i) out[i] = j[s + i];
+        for (uint256 i; i < out.length; ++i) {
+            out[i] = j[s + i];
+        }
         return string(out);
     }
 
@@ -607,7 +685,9 @@ contract FrensPlacementForkTest is Test, FrensRules {
     function _find(bytes memory hay, bytes memory needle, uint256 from) internal pure returns (uint256) {
         for (uint256 i = from; i + needle.length <= hay.length; ++i) {
             bool ok = true;
-            for (uint256 k; k < needle.length && ok; ++k) ok = hay[i + k] == needle[k];
+            for (uint256 k; k < needle.length && ok; ++k) {
+                ok = hay[i + k] == needle[k];
+            }
             if (ok) return i;
         }
         return type(uint256).max;
@@ -616,7 +696,9 @@ contract FrensPlacementForkTest is Test, FrensRules {
     function _prefix(string memory str, uint256 n) internal pure returns (string memory) {
         bytes memory b = bytes(str);
         bytes memory out = new bytes(n);
-        for (uint256 i; i < n; ++i) out[i] = b[i];
+        for (uint256 i; i < n; ++i) {
+            out[i] = b[i];
+        }
         return string(out);
     }
 }

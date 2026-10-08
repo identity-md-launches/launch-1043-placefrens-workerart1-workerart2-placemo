@@ -3,6 +3,14 @@ pragma solidity ^0.8.26;
 
 import {FrensCode} from "./FrensCode.sol";
 import {FrensPlan} from "./FrensPlan.sol";
+import {WorkerArtIndex} from "./art/WorkerArtIndex.sol";
+
+/// @dev What PlaceModules reads of the swapper it placed (FrenSwapper)
+interface IPlacedSwapper {
+    function rateAverage() external view returns (uint256);
+    function averagedAt() external view returns (uint256);
+    function spotRate() external view returns (uint256);
+}
 
 /// @dev Creates a contract through the standard CREATE2 deployer, so where it lands depends only on the salt and the
 ///      code (FrensPlan's addresses), not on who runs the launch. Where that deployer doesn't exist (IMD first runs a
@@ -70,6 +78,11 @@ contract PlaceFrens is Placer {
 ///         this). The launch passes it PlaceFrens and the chunks (`$contract:PlaceFrens`, `$contract:WorkerArt1`,
 ///         `$contract:WorkerArt2`). All but the renderer land at FrensPlan's addresses; the renderer's follows from the
 ///         chunks' (read it here: `renderer()`).
+/// @dev It never wires the frens wrong. The two chunks must be the exact code WorkerArtIndex was generated from (the
+///      renderer would draw nothing otherwise): PlaceFailed. And a swapper it finds already placed at 0x6900… is taken
+///      only if its price average is the pool's price now (within 2x): otherwise the launch creates its own (a plain
+///      CREATE from this contract, so nobody can have put anything there), seeded at this block's price, and that one
+///      is the frens' swapper (`swapper()`), not FrensPlan.SWAPPER_AT.
 contract PlaceModules is Placer {
     address public immutable frens;
     address public immutable swapper;
@@ -78,23 +91,55 @@ contract PlaceModules is Placer {
     address public immutable renderer;
 
     constructor(PlaceFrens placed, address art1, address art2) {
+        if (art1.codehash != _chunkHash(7) || art2.codehash != _chunkHash(8)) revert PlaceFailed();
         address f = placed.frens();
         frens = f;
-        swapper = _place(
-            FrensPlan.SWAPPER_SALT,
-            abi.encodePacked(
-                FrensCode.SWAPPER,
-                abi.encode(FrensPlan.POOL_MANAGER, FrensPlan.IMD, FrensPlan.IMD6900, f, FrensPlan.PAIR_HOOK, FrensPlan.POOL4_HOOK)
+        bytes memory init = abi.encodePacked(
+            FrensCode.SWAPPER,
+            abi.encode(
+                FrensPlan.POOL_MANAGER, FrensPlan.IMD, FrensPlan.IMD6900, f, FrensPlan.PAIR_HOOK, FrensPlan.POOL4_HOOK
             )
         );
+        address s = _place(FrensPlan.SWAPPER_SALT, init);
+        if (!_soundSwapper(s)) {
+            assembly ("memory-safe") {
+                s := create(0, add(init, 32), mload(init))
+            }
+            if (s == address(0)) revert PlaceFailed();
+        }
+        swapper = s;
         minter = _place(
             FrensPlan.MINTER_SALT,
-            abi.encodePacked(FrensCode.MINTER, abi.encode(FrensPlan.POOL_MANAGER, f, FrensPlan.POOL4_HOOK, FrensPlan.PAIR_HOOK))
+            abi.encodePacked(
+                FrensCode.MINTER, abi.encode(FrensPlan.POOL_MANAGER, f, FrensPlan.POOL4_HOOK, FrensPlan.PAIR_HOOK)
+            )
         );
         gate = _place(
             FrensPlan.GATE_SALT,
             abi.encodePacked(FrensCode.GATE, abi.encode(FrensPlan.OWNER, f, FrensPlan.IDENTITY, FrensPlan.IMD6900))
         );
         renderer = _place(FrensPlan.RENDERER_SALT, abi.encodePacked(FrensCode.RENDERER, abi.encode(art1, art2)));
+    }
+
+    /// @dev The swapper's slow price average starts at the IMD6900/$IMD pool's price in the block that creates it, and
+    ///      the frens value their floor at the lower of it and the pool's price. Anyone may place the exact swapper
+    ///      before the launch, in a block whose price they pushed: the launch takes only one whose average is the
+    ///      pool's price now, within 2x. Nothing seeded (no pool manager here, or the pool not open): nothing to check.
+    function _soundSwapper(address s) internal view returns (bool) {
+        if (IPlacedSwapper(s).averagedAt() == 0) return true;
+        uint256 avg = IPlacedSwapper(s).rateAverage();
+        uint256 spot = IPlacedSwapper(s).spotRate();
+        return avg * 2 >= spot && avg <= spot * 2;
+    }
+
+    /// @dev Chunk `c`'s code hash out of WorkerArtIndex's hex text (64 digits each), as the renderer reads it
+    function _chunkHash(uint256 c) internal pure returns (bytes32) {
+        bytes memory text = WorkerArtIndex.CHUNK_HASHES;
+        uint256 v;
+        for (uint256 k = c * 64; k < c * 64 + 64; ++k) {
+            uint256 d = uint8(text[k]);
+            v = v << 4 | (d < 0x3a ? d - 0x30 : d - 0x57);
+        }
+        return bytes32(v);
     }
 }

@@ -50,6 +50,7 @@ contract FrenWorkerGate is IWorkerGate, Ownable {
     error NotYours(uint256 id);
     error AlreadyClaimed(uint256 id);
     error NoCredit(uint256 credits);
+    error WindowFull(uint256 left);
     error BadClaim();
     error NotOnWl();
     error WlClaimedAlready(uint256 claimed);
@@ -73,7 +74,8 @@ contract FrenWorkerGate is IWorkerGate, Ownable {
         for (uint256 i; i < ids.length; ++i) {
             uint256 id = ids[i];
             address holder = identity.ownerOf(id);
-            if (holder != msg.sender && (holder != strategy || msg.sender != ISeatStrategyMin(strategy).seatOperator())) {
+            if (holder != msg.sender && (holder != strategy || msg.sender != ISeatStrategyMin(strategy).seatOperator()))
+            {
                 revert NotYours(id);
             }
             if (claimed[id]) revert AlreadyClaimed(id);
@@ -87,7 +89,9 @@ contract FrenWorkerGate is IWorkerGate, Ownable {
     ///         the rest if the owner's list raised it since
     function claimWl(uint256 amount, bytes32[] calldata proof, address to) external {
         if (to == address(0)) revert BadClaim();
-        if (!_verify(proof, wlRoot, keccak256(bytes.concat(keccak256(abi.encode(msg.sender, amount)))))) revert NotOnWl();
+        if (!_verify(proof, wlRoot, keccak256(bytes.concat(keccak256(abi.encode(msg.sender, amount)))))) {
+            revert NotOnWl();
+        }
         uint256 had = wlClaimed[msg.sender];
         if (amount <= had) revert WlClaimedAlready(had);
         wlClaimed[msg.sender] = amount;
@@ -112,12 +116,15 @@ contract FrenWorkerGate is IWorkerGate, Ownable {
     }
 
     /// @notice The frens contract, before each mint of the open mint: in the window it takes `count` of the minter's
-    ///         credits, or refuses the mint
+    ///         credits, or refuses the mint. The window is exactly WORKER_FRENS: a request past what is left of it is
+    ///         refused too (WindowFull says how many are left).
     function spend(address minter, uint256 count) external {
         if (msg.sender != frens) revert OnlyFrens();
         if (!workerWindow()) return;
         uint256 c = credits[minter];
         if (c < count) revert NoCredit(c);
+        uint256 left = WORKER_FRENS - workerMinted;
+        if (count > left) revert WindowFull(left);
         credits[minter] = c - count;
         workerMinted += count;
     }

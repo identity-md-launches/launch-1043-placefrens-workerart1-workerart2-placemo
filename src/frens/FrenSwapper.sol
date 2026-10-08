@@ -33,8 +33,9 @@ interface IPairFee {
 ///         It also prices IMD6900 for the frens' mint, which must never cost less than the floor it joins:
 ///         floorRate() is the lower of two readings of IMD6900 per $IMD, so IMD6900 counts at its dearest: the pool's
 ///         price now, and a slow average of what the floor's own buys paid (fee and impact included). One trade can
-///         move the first; the second moves 1/64 of the way a block, and only when the floor buys, so pushing both
-///         means holding the pool off its price for many blocks, against arbitrage, while the floor buys cheap.
+///         move the first; the second moves at most 1/64 of the way a block, only when the floor buys, and only as far
+///         as the buy is big (a full step for FULL_BUY, 50 $IMD; dust moves it next to nothing), so pushing both means
+///         holding the pool off its price for many blocks, against arbitrage, while buying the floor a full buy a block.
 /// @dev Exact-input swaps inside one PoolManager unlock, as ArbVaultV2 does: pay the input in, take IMD6900 out, so
 ///      the IMD6900 hook's allowance is spent by the transfer it was granted for. On the ETH route the $IMD never
 ///      leaves the PoolManager: the second swap spends the first one's credit (flash accounting).
@@ -44,6 +45,8 @@ contract FrenSwapper is IFrenSwapper {
 
     uint256 internal constant BIPS = 10_000;
     uint256 public constant POOL4_MOVE_BIPS = 50; // POOL4's price moves at most 0.5% a buy
+    /// @notice A floor buy this big ($IMD) moves the average a full step; a smaller one moves it in proportion
+    uint256 public constant FULL_BUY = 50e18; // the frens' default maxImdPerBuy
 
     /// @notice A slow average of the IMD6900 the floor's buys got per $IMD (1e18), and the block it last moved
     uint256 public rateAverage;
@@ -59,7 +62,14 @@ contract FrenSwapper is IFrenSwapper {
     error OnlyPoolManager();
     error Short();
 
-    constructor(address poolManager_, address imd_, address imd6900_, address frens_, address pairHook_, address imdPoolHook_) {
+    constructor(
+        address poolManager_,
+        address imd_,
+        address imd6900_,
+        address frens_,
+        address pairHook_,
+        address imdPoolHook_
+    ) {
         poolManager = IPoolManager(poolManager_);
         imd = imd_;
         imd6900 = imd6900_;
@@ -110,12 +120,21 @@ contract FrenSwapper is IFrenSwapper {
         if (rateAverage != 0 && rateAverage < rate) rate = rateAverage;
     }
 
-    /// @dev Moves the average 1/64 of the way to a buy's rate, once a block at most (it starts at the pool's price when
-    ///      this is deployed; only if the pool wasn't open then does the first buy set it)
+    /// @dev Moves the average towards a buy's rate, once a block at most: 1/64 of the way for a buy of FULL_BUY or
+    ///      more, proportionally less for a smaller one, so steering it means buying the floor a full buy a block at the
+    ///      pushed price (every one of them bought into the reserve), not sending it dust. It starts at the pool's price
+    ///      when this is deployed; only if the pool wasn't open then does the first buy set it.
     function _average(uint256 imdIn, uint256 out) internal {
         if (imdIn == 0 || out == 0 || averagedAt == block.number) return;
         uint256 r = out * 1e18 / imdIn;
-        rateAverage = rateAverage == 0 ? r : rateAverage - rateAverage / 64 + r / 64;
+        uint256 avg = rateAverage;
+        if (avg == 0) {
+            avg = r;
+        } else {
+            uint256 w = imdIn < FULL_BUY ? imdIn : FULL_BUY;
+            avg = r > avg ? avg + (r - avg) * w / (64 * FULL_BUY) : avg - (avg - r) * w / (64 * FULL_BUY);
+        }
+        rateAverage = avg;
         averagedAt = block.number;
     }
 
@@ -135,9 +154,12 @@ contract FrenSwapper is IFrenSwapper {
     ///         what's left goes back.
     function imdToImd6900(uint256 imdIn, uint256 minOut, address to) external returns (uint256 out) {
         if (msg.sender != frens) revert OnlyFrens();
-        SafeTransferLib.safeTransferFrom(imd, frens, address(this), imdIn);
+        SafeTransferLib.safeTransferFrom(imd, msg.sender, address(this), imdIn); // the frens contract's own $IMD
         PoolKey memory key = pairKey();
-        out = abi.decode(poolManager.unlock(abi.encode(false, abi.encode(key, Currency.unwrap(key.currency0) == imd, imdIn, to))), (uint256));
+        out = abi.decode(
+            poolManager.unlock(abi.encode(false, abi.encode(key, Currency.unwrap(key.currency0) == imd, imdIn, to))),
+            (uint256)
+        );
         if (out < minOut) revert Short();
     }
 
@@ -153,10 +175,15 @@ contract FrenSwapper is IFrenSwapper {
         if (msg.sender != address(poolManager)) revert OnlyPoolManager();
         (bool viaImd, bytes memory data) = abi.decode(raw, (bool, bytes));
         if (viaImd) return _ethViaImd(data);
-        (PoolKey memory key, bool zeroForOne, uint256 amountIn, address to) = abi.decode(data, (PoolKey, bool, uint256, address));
+        (PoolKey memory key, bool zeroForOne, uint256 amountIn, address to) =
+            abi.decode(data, (PoolKey, bool, uint256, address));
         BalanceDelta delta = poolManager.swap(
             key,
-            SwapParams({zeroForOne: zeroForOne, amountSpecified: -int256(amountIn), sqrtPriceLimitX96: _limit(key, zeroForOne, pairMoveBips())}),
+            SwapParams({
+                zeroForOne: zeroForOne,
+                amountSpecified: -int256(amountIn),
+                sqrtPriceLimitX96: _limit(key, zeroForOne, pairMoveBips())
+            }),
             ""
         );
         (int128 paid, int128 got) = zeroForOne ? (delta.amount0(), delta.amount1()) : (delta.amount1(), delta.amount0());
@@ -188,7 +215,13 @@ contract FrenSwapper is IFrenSwapper {
         (uint256 ethIn, address to) = abi.decode(data, (uint256, address));
         PoolKey memory pool4 = imdKey();
         BalanceDelta d1 = poolManager.swap(
-            pool4, SwapParams({zeroForOne: true, amountSpecified: -int256(ethIn), sqrtPriceLimitX96: _limit(pool4, true, POOL4_MOVE_BIPS)}), ""
+            pool4,
+            SwapParams({
+                zeroForOne: true,
+                amountSpecified: -int256(ethIn),
+                sqrtPriceLimitX96: _limit(pool4, true, POOL4_MOVE_BIPS)
+            }),
+            ""
         );
         uint256 ethPaid = uint256(uint128(-d1.amount0()));
         uint256 imdGot = uint256(uint128(d1.amount1()));
@@ -196,7 +229,11 @@ contract FrenSwapper is IFrenSwapper {
         bool imdIs0 = Currency.unwrap(pair.currency0) == imd;
         BalanceDelta d2 = poolManager.swap(
             pair,
-            SwapParams({zeroForOne: imdIs0, amountSpecified: -int256(imdGot), sqrtPriceLimitX96: _limit(pair, imdIs0, pairMoveBips())}),
+            SwapParams({
+                zeroForOne: imdIs0,
+                amountSpecified: -int256(imdGot),
+                sqrtPriceLimitX96: _limit(pair, imdIs0, pairMoveBips())
+            }),
             ""
         );
         (int128 paid, int128 got) = imdIs0 ? (d2.amount0(), d2.amount1()) : (d2.amount1(), d2.amount0());

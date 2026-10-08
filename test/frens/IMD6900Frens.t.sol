@@ -11,10 +11,22 @@ import {FrenArt} from "./DataWriter.sol";
 
 contract MockToken is ERC20 {
     string internal n;
-    constructor(string memory n_) { n = n_; }
-    function name() public view override returns (string memory) { return n; }
-    function symbol() public view override returns (string memory) { return n; }
-    function mint(address to, uint256 a) external { _mint(to, a); }
+
+    constructor(string memory n_) {
+        n = n_;
+    }
+
+    function name() public view override returns (string memory) {
+        return n;
+    }
+
+    function symbol() public view override returns (string memory) {
+        return n;
+    }
+
+    function mint(address to, uint256 a) external {
+        _mint(to, a);
+    }
 }
 
 /// @dev Like IMD6900: a transfer of nothing reverts
@@ -35,14 +47,26 @@ contract NoZeroToken is MockToken {
 /// @dev v4's PoolManager as the frens see it: is it unlocked right now (transient slot Lock.IS_UNLOCKED_SLOT)?
 contract MockPoolManager {
     bool unlocked;
-    function setUnlocked(bool u) external { unlocked = u; }
-    function exttload(bytes32) external view returns (bytes32) { return unlocked ? bytes32(uint256(1)) : bytes32(0); }
+
+    function setUnlocked(bool u) external {
+        unlocked = u;
+    }
+
+    function exttload(bytes32) external view returns (bytes32) {
+        return unlocked ? bytes32(uint256(1)) : bytes32(0);
+    }
 }
 
 contract MockPermit2 {
     mapping(address => mapping(uint256 => uint256)) public nonceBitmap;
-    function DOMAIN_SEPARATOR() external pure returns (bytes32) { return keccak256("permit2"); }
-    function spend(address owner, uint256 nonce) external { nonceBitmap[owner][nonce >> 8] |= 1 << (nonce & 0xff); }
+
+    function DOMAIN_SEPARATOR() external pure returns (bytes32) {
+        return keccak256("permit2");
+    }
+
+    function spend(address owner, uint256 nonce) external {
+        nonceBitmap[owner][nonce >> 8] |= 1 << (nonce & 0xff);
+    }
 }
 
 /// @dev Pays out `rate` IMD6900 per unit in, minted fresh.
@@ -51,35 +75,70 @@ contract MockSwapper is IFrenSwapper {
     MockToken public immutable imdToken;
     uint256 public rate = 70_000;
     uint256 public spendBps = 10_000; // how much of a buy the price limit lets through
-    constructor(MockToken o, MockToken i) { out = o; imdToken = i; }
-    function setRate(uint256 r) external { rate = r; }
-    function setSpend(uint256 b) external { spendBps = b; }
+
+    constructor(MockToken o, MockToken i) {
+        out = o;
+        imdToken = i;
+    }
+
+    function setRate(uint256 r) external {
+        rate = r;
+    }
+
+    function setSpend(uint256 b) external {
+        spendBps = b;
+    }
     uint256 public floorRateSet; // 0: the swap's own rate
-    function setFloorRate(uint256 r) external { floorRateSet = r; }
-    function floorRate() external view returns (uint256) { return floorRateSet != 0 ? floorRateSet : rate * 1e18; }
+
+    function setFloorRate(uint256 r) external {
+        floorRateSet = r;
+    }
+
+    function floorRate() external view returns (uint256) {
+        return floorRateSet != 0 ? floorRateSet : rate * 1e18;
+    }
+
     function imdToImd6900(uint256 imdIn, uint256, address to) external returns (uint256 got) {
         uint256 spend = imdIn * spendBps / 10_000;
         imdToken.transferFrom(msg.sender, address(this), spend); // pulls what it spends, as FrenSwapper does
-        got = spend * rate; out.mint(to, got);
+        got = spend * rate;
+        out.mint(to, got);
     }
+
     function ethToImd6900(uint256, address to) external payable returns (uint256 got) {
-        got = msg.value * rate * 3000; out.mint(to, got);
+        got = msg.value * rate * 3000;
+        out.mint(to, got);
     }
 }
 
 /// @dev A transfer validator that lets only `allowed` move frens between holders (or the holder itself, OTC)
 contract RevertingSwapper is IFrenSwapper {
-    function floorRate() external pure returns (uint256) { return 70_000e18; }
-    function imdToImd6900(uint256, uint256, address) external pure returns (uint256) { revert("pool closed"); }
-    function ethToImd6900(uint256, address) external payable returns (uint256) { revert("pool closed"); }
+    function floorRate() external pure returns (uint256) {
+        return 70_000e18;
+    }
+
+    function imdToImd6900(uint256, uint256, address) external pure returns (uint256) {
+        revert("pool closed");
+    }
+
+    function ethToImd6900(uint256, address) external payable returns (uint256) {
+        revert("pool closed");
+    }
 }
 
 contract MockValidator {
     address public allowed;
     uint16 public tokenType;
     error Blocked();
-    function allow(address a) external { allowed = a; }
-    function setTokenTypeOfCollection(address, uint16 t) external { tokenType = t; }
+
+    function allow(address a) external {
+        allowed = a;
+    }
+
+    function setTokenTypeOfCollection(address, uint16 t) external {
+        tokenType = t;
+    }
+
     function validateTransfer(address caller, address from, address, uint256) external view {
         if (caller != from && caller != allowed) revert Blocked();
     }
@@ -89,12 +148,17 @@ contract MockRenderer {
     function tokenURI(uint256 id, uint24 combo, uint256) external pure returns (string memory) {
         return string.concat("fren:", vm_toString(id), ":", vm_toString(combo));
     }
+
     function pendingURI(uint256 id) external pure returns (string memory) {
         return string.concat("unrevealed:", vm_toString(id));
     }
+
     function vm_toString(uint256 v) internal pure returns (string memory s) {
         if (v == 0) return "0";
-        while (v > 0) { s = string.concat(string(abi.encodePacked(bytes1(uint8(48 + v % 10)))), s); v /= 10; }
+        while (v > 0) {
+            s = string.concat(string(abi.encodePacked(bytes1(uint8(48 + v % 10)))), s);
+            v /= 10;
+        }
     }
 }
 
@@ -132,7 +196,18 @@ contract IMD6900FrensTest is Test, FrensRules {
     }
 
     function _deploy(uint16[3] memory chars) internal returns (IMD6900Frens f) {
-        f = new IMD6900Frens(timelock, address(imd), address(imd6900), address(idmd), address(permit2), proxy, payTo, keeper, relayer, _flatPrices());
+        f = new IMD6900Frens(
+            timelock,
+            address(imd),
+            address(imd6900),
+            address(idmd),
+            address(permit2),
+            proxy,
+            payTo,
+            keeper,
+            relayer,
+            _flatPrices()
+        );
         vm.startPrank(timelock);
         _rules(f, chars);
         f.sealTraits();
@@ -152,7 +227,11 @@ contract IMD6900FrensTest is Test, FrensRules {
         a[0] = combo;
     }
 
-    function _sign(IMD6900Frens f, uint256 key, uint256 id, uint24 combo, uint256 deadline) internal view returns (bytes memory) {
+    function _sign(IMD6900Frens f, uint256 key, uint256 id, uint24 combo, uint256 deadline)
+        internal
+        view
+        returns (bytes memory)
+    {
         return _signMany(f, key, id, _one(combo), deadline);
     }
 
@@ -161,7 +240,8 @@ contract IMD6900FrensTest is Test, FrensRules {
         view
         returns (bytes memory)
     {
-        (uint8 v, bytes32 r, bytes32 s_) = vm.sign(key, f.voucherDigest(id, combos, "job-1", keccak256("out"), deadline));
+        (uint8 v, bytes32 r, bytes32 s_) =
+            vm.sign(key, f.voucherDigest(id, combos, "job-1", keccak256("out"), deadline));
         return abi.encodePacked(r, s_, v);
     }
 
@@ -171,7 +251,15 @@ contract IMD6900FrensTest is Test, FrensRules {
     }
 
     function _quote() internal view returns (IMD6900Frens.Quote memory q) {
-        q = IMD6900Frens.Quote("https://api.imd.fun/requests/x", bytes32("scope"), "q1", bytes32("qh"), bytes32("ph"), "job.open", block.timestamp + 600);
+        q = IMD6900Frens.Quote(
+            "https://api.imd.fun/requests/x",
+            bytes32("scope"),
+            "q1",
+            bytes32("qh"),
+            bytes32("ph"),
+            "job.open",
+            block.timestamp + 600
+        );
     }
 
     function _approve(uint256 id) internal {
@@ -207,7 +295,10 @@ contract IMD6900FrensTest is Test, FrensRules {
     }
 
     /// @dev A wallet holding exactly this much of each
-    function _holder(string memory label, uint256 imdBal, uint256 imd6900Bal, uint256 nfts) internal returns (address w) {
+    function _holder(string memory label, uint256 imdBal, uint256 imd6900Bal, uint256 nfts)
+        internal
+        returns (address w)
+    {
         w = makeAddr(label);
         imd.mint(w, imdBal + 0.69e18); // what they keep after paying the mint
         if (imd6900Bal > 0) imd6900.mint(w, imd6900Bal);
@@ -219,7 +310,18 @@ contract IMD6900FrensTest is Test, FrensRules {
     /* ── the traits ─────────────────────────────────────────────── */
 
     function test_MintNeedsSealedTraits() public {
-        IMD6900Frens f = new IMD6900Frens(timelock, address(imd), address(imd6900), address(idmd), address(permit2), proxy, payTo, keeper, relayer, _flatPrices());
+        IMD6900Frens f = new IMD6900Frens(
+            timelock,
+            address(imd),
+            address(imd6900),
+            address(idmd),
+            address(permit2),
+            proxy,
+            payTo,
+            keeper,
+            relayer,
+            _flatPrices()
+        );
         vm.prank(timelock);
         f.setMintOpen(true);
         vm.prank(alice);
@@ -228,7 +330,18 @@ contract IMD6900FrensTest is Test, FrensRules {
     }
 
     function test_SealNeedsEveryTraitAndTheSupply() public {
-        IMD6900Frens f = new IMD6900Frens(timelock, address(imd), address(imd6900), address(idmd), address(permit2), proxy, payTo, keeper, relayer, _flatPrices());
+        IMD6900Frens f = new IMD6900Frens(
+            timelock,
+            address(imd),
+            address(imd6900),
+            address(idmd),
+            address(permit2),
+            proxy,
+            payTo,
+            keeper,
+            relayer,
+            _flatPrices()
+        );
         vm.startPrank(timelock);
         vm.expectRevert(IMD6900Frens.BadTraits.selector);
         f.sealTraits(); // nothing set
@@ -446,7 +559,11 @@ contract IMD6900FrensTest is Test, FrensRules {
         }
         assertEq(frens.ruleOf(1, LASER).minted, 56);
         uint256 last = _request(alice);
-        _revealReverts(last, _combo(PEPE, LASER, 0, 1, 0, 0, 0, 0), abi.encodeWithSelector(IMD6900Frens.BadCombo.selector, uint8(3)));
+        _revealReverts(
+            last,
+            _combo(PEPE, LASER, 0, 1, 0, 0, 0, 0),
+            abi.encodeWithSelector(IMD6900Frens.BadCombo.selector, uint8(3))
+        );
     }
 
     function test_RareTraitsNeedTheTier() public {
@@ -464,7 +581,9 @@ contract IMD6900FrensTest is Test, FrensRules {
     function test_PairRules() public {
         address mid = _holder("mid", 69e18, 0, 0); // tier 2
         uint256 a = _request(mid);
-        _revealReverts(a, _combo(MUMU, 0, 0, GOLD, 0, 0, 0, 0), abi.encodeWithSelector(IMD6900Frens.BadCombo.selector, uint8(4)));
+        _revealReverts(
+            a, _combo(MUMU, 0, 0, GOLD, 0, 0, 0, 0), abi.encodeWithSelector(IMD6900Frens.BadCombo.selector, uint8(4))
+        );
         _reveal(a, _combo(MUMU, 0, 0, 1, 0, 0, 0, 0)); // a black coat: tier 2 is enough
     }
 
@@ -479,7 +598,9 @@ contract IMD6900FrensTest is Test, FrensRules {
         address late = _holder("late", 0, 0, 0); // tier 0 at the mint
         uint256 b = _request(late);
         idmd.mint(late, 1); // an identity.md after minting
-        _revealReverts(b, _combo(MUMU, 0, 0, 0, 0, 0, 0, 0), abi.encodeWithSelector(IMD6900Frens.BadCombo.selector, uint8(4)));
+        _revealReverts(
+            b, _combo(MUMU, 0, 0, 0, 0, 0, 0, 0), abi.encodeWithSelector(IMD6900Frens.BadCombo.selector, uint8(4))
+        );
     }
 
     function test_OnlyRealFrens() public {
@@ -589,6 +710,58 @@ contract IMD6900FrensTest is Test, FrensRules {
         _reveal(id, _common());
     }
 
+    /// @dev A payment approved that IMD never took before its deadline, with the request revealed in full: the reveal
+    ///      undoes it and its 0.50 feeds the floor, so nothing stays booked as a payment Permit2 could take
+    function test_RevealReleasesALapsedPayment() public {
+        uint256 id = _request(alice);
+        vm.prank(keeper);
+        (bytes32 pd,) = frens.approveJob(id, 42, block.timestamp + 600, _quote());
+        vm.warp(block.timestamp + 601);
+        uint256 waiting = frens.floorImd();
+        _reveal(id, _common());
+        assertEq(imd.allowance(address(frens), address(permit2)), 0, "nothing left for Permit2 to take");
+        assertEq(frens.isValidSignature(pd, ""), bytes4(0xffffffff));
+        assertEq(frens.floorImd(), waiting + 0.5e18, "the job's 0.50 joined the floor");
+        assertEq(frens.jobBudget(), 0);
+        assertEq(imd.balanceOf(address(frens)), frens.floorImd(), "the books add up");
+    }
+
+    /// @dev A payment still good when the reveal lands stays IMD's to take; once it lapses untaken, anyone releases
+    ///      it to the floor. A payment taken, or a request still revealing, is never released this way.
+    function test_ReleaseLapsedJobAfterTheReveal() public {
+        uint256 id = _request(alice);
+        vm.prank(keeper);
+        (bytes32 pd,) = frens.approveJob(id, 42, block.timestamp + 600, _quote());
+        _reveal(id, _common());
+        assertEq(imd.allowance(address(frens), address(permit2)), 0.5e18, "still IMD's to take");
+        vm.expectRevert(IMD6900Frens.BadJob.selector); // not lapsed yet
+        frens.releaseLapsedJob(id);
+        vm.warp(block.timestamp + 601);
+        vm.prank(bob); // anyone
+        frens.releaseLapsedJob(id);
+        assertEq(imd.allowance(address(frens), address(permit2)), 0);
+        assertEq(frens.isValidSignature(pd, ""), bytes4(0xffffffff));
+        assertEq(frens.floorImd(), 0.5e18);
+        vm.expectRevert(IMD6900Frens.BadJob.selector); // once
+        frens.releaseLapsedJob(id);
+        // a request still revealing: its lapsed payment is the keeper's to approve again, not anyone's to release
+        uint256 id2 = _request(bob);
+        _approve(id2);
+        vm.warp(block.timestamp + 601);
+        vm.expectRevert(IMD6900Frens.BadJob.selector);
+        frens.releaseLapsedJob(id2);
+        // a payment IMD took: nothing to release, at the reveal or after
+        uint256 id3 = _request(alice);
+        _approve(id3);
+        permit2.spend(address(frens), id3);
+        vm.warp(block.timestamp + 601);
+        uint256 waiting = frens.floorImd();
+        _reveal(id3, _common());
+        assertEq(frens.floorImd(), waiting, "the job was paid: nothing comes back");
+        vm.expectRevert(IMD6900Frens.BadJob.selector);
+        frens.releaseLapsedJob(id3);
+    }
+
     /// @dev A retry paid while the last job landed after all: its 0.50 feeds the floor
     function test_UnneededRetryFeedsTheFloor() public {
         uint256 id = _request(alice);
@@ -632,7 +805,9 @@ contract IMD6900FrensTest is Test, FrensRules {
         uint256 back = gotImd + got6900 * 1e18 / rate;
         assertLt(back, paid, "selling straight back returns less than the mint cost");
         (uint256 a6900, uint256 aImd) = frens.floorPerFren();
-        assertApproxEqAbs(aImd + a6900 * 1e18 / rate, value - 0.5e18 / 5, 1e12, "the others keep the floor, less a fifth of one job");
+        assertApproxEqAbs(
+            aImd + a6900 * 1e18 / rate, value - 0.5e18 / 5, 1e12, "the others keep the floor, less a fifth of one job"
+        );
     }
 
     /// @dev IMD6900 counts at its dearest: a lower rate (IMD6900 dearer) makes the floor, and the mint, cost more
@@ -671,6 +846,7 @@ contract IMD6900FrensTest is Test, FrensRules {
     /// @dev An unrevealed fren sells at the floor too, and still reveals later, in the treasury
     function test_UnrevealedFrenSellsAtTheFloor() public {
         uint256 id = _request(alice);
+        _request(bob); // another out: alice's isn't the last
         vm.prank(alice);
         (uint256 paid,) = frens.recycle(1);
         assertGt(paid, 0);
@@ -679,23 +855,48 @@ contract IMD6900FrensTest is Test, FrensRules {
         assertTrue(frens.seedOf(1) != 0);
     }
 
-    /// @dev With every fren in the treasury, buying one back costs twice the whole floor, never nothing
-    function test_EmptyWorldFloorIsNotFree() public {
+    /// @dev The last fren out in the world stays out (recycled or sent to the treasury): with every fren in the treasury
+    ///      the floor would have no owner, and the next mint, at the curve's price, would take every fee that arrived
+    ///      meanwhile. So the fees always have an owner, and a mint always pays the floor it joins.
+    function test_LastFrenOutStaysOut() public {
         _floorOf(1);
         vm.prank(alice);
-        frens.recycle(1); // the only fren, back in the treasury
-        (bool ok,) = address(frens).call{value: 0.1 ether}(""); // fees keep coming
+        vm.expectRevert(IMD6900Frens.LastFrenOut.selector);
+        frens.recycle(1);
+        vm.prank(alice);
+        vm.expectRevert(IMD6900Frens.LastFrenOut.selector);
+        frens.transferFrom(alice, address(frens), 1);
+        (bool ok,) = address(frens).call{value: 0.1 ether}(""); // fees keep coming: they are alice's fren's
         assertTrue(ok);
         vm.roll(vm.getBlockNumber() + 1);
         frens.buyFloorWithEth(0.1 ether, 0);
         (uint256 f,) = frens.floorPerFren();
-        assertEq(f, frens.reserve(), "one share: all of it");
-        imd6900.mint(bob, 1e30);
-        vm.startPrank(bob);
-        imd6900.approve(address(frens), type(uint256).max);
-        (uint256 paid,) = frens.buyTreasury(1, type(uint256).max, type(uint256).max);
-        vm.stopPrank();
-        assertEq(paid, 2 * f);
+        assertEq(f, frens.reserve(), "one fren out: the whole floor is its");
+        uint256 paid = frens.quote(1);
+        assertGe(paid, frens.reserve() * 1e18 / swapper.floorRate(), "the next mint pays the floor it joins");
+        vm.prank(bob);
+        frens.requestMint(1, paid);
+        vm.prank(bob);
+        (uint256 got6900, uint256 gotImd) = frens.recycle(2); // two out: bob's can go back
+        assertLe(got6900 * 1e18 / swapper.floorRate() + gotImd, paid, "selling straight back never pays");
+        vm.prank(alice);
+        vm.expectRevert(IMD6900Frens.LastFrenOut.selector); // alice's is the last out again
+        frens.recycle(1);
+    }
+
+    /// @dev $IMD that arrived since the last floor buy (IMD's job refunds, a gift) is the floor's already: quote counts
+    ///      it, so a mint right before the sweep can't sell straight back at a profit
+    function test_QuoteCountsUnsweptImd() public {
+        _floorOf(4);
+        imd.mint(address(frens), 10e18); // arrived, not swept yet
+        uint256 paid = frens.quote(1);
+        assertApproxEqAbs(paid, (_floorValue() + 10e18) / 4, 4, "a share of the floor, the arrival included");
+        vm.roll(vm.getBlockNumber() + 1);
+        vm.prank(bob);
+        frens.requestMint(1, paid);
+        vm.prank(bob);
+        (uint256 got6900, uint256 gotImd) = frens.recycle(5);
+        assertLe(got6900 / swapper.rate() + gotImd, paid, "the sweep is everyone's");
     }
 
     /// @dev The swapper may pull only the buy at hand, never the job budget or the rest of the floor
@@ -713,7 +914,9 @@ contract IMD6900FrensTest is Test, FrensRules {
 
     /// @dev n mints: the first buys its floor share at once (one buy a block), the rest are bought in the next block
     function _floorOf(uint256 n) internal {
-        for (uint256 i; i < n; ++i) _mintOne(i % 2 == 0 ? alice : bob);
+        for (uint256 i; i < n; ++i) {
+            _mintOne(i % 2 == 0 ? alice : bob);
+        }
         vm.roll(vm.getBlockNumber() + 1);
         if (frens.floorImd() != 0) frens.buyFloor(1);
     }
@@ -772,7 +975,9 @@ contract IMD6900FrensTest is Test, FrensRules {
     /// @dev The floor is both parts: $IMD still waiting to be bought in counts, and recycling pays its share of it
     function test_RecyclePaysTheWaitingImdToo() public {
         swapper.setSpend(0); // the pool at its price limit: nothing bought yet, 4 x 0.19 waiting
-        for (uint256 i; i < 4; ++i) _mintOne(i % 2 == 0 ? alice : bob);
+        for (uint256 i; i < 4; ++i) {
+            _mintOne(i % 2 == 0 ? alice : bob);
+        }
         (uint256 f, uint256 fi) = frens.floorPerFren();
         assertEq(f, 0);
         assertEq(fi, 0.19e18);
@@ -789,7 +994,9 @@ contract IMD6900FrensTest is Test, FrensRules {
     /// @dev Buying back costs twice both parts, so no round trip through the treasury takes anything out of the floor
     function test_TreasuryRoundTripCostsTheFloor() public {
         swapper.setSpend(5_000); // each buy stops halfway: part bought in, part waiting
-        for (uint256 i; i < 4; ++i) _mintOne(i % 2 == 0 ? alice : bob);
+        for (uint256 i; i < 4; ++i) {
+            _mintOne(i % 2 == 0 ? alice : bob);
+        }
         vm.prank(alice);
         frens.recycle(1);
         (uint256 f, uint256 fi) = frens.floorPerFren();
@@ -852,7 +1059,9 @@ contract IMD6900FrensTest is Test, FrensRules {
 
     /// @dev A buy takes at most maxImdPerBuy (50 $IMD); the rest waits for the next block's
     function test_FloorBuysAreCapped() public {
-        for (uint256 i; i < 300; ++i) _request(alice); // the first buys its 0.19; 299 x 0.19 wait
+        for (uint256 i; i < 300; ++i) {
+            _request(alice); // the first buys its 0.19; 299 x 0.19 wait
+        }
         vm.roll(vm.getBlockNumber() + 1);
         frens.buyFloor(1);
         assertEq(frens.floorImd(), 299 * 0.19e18 - 50e18);
@@ -1051,7 +1260,11 @@ contract IMD6900FrensTest is Test, FrensRules {
     /* ── ERC-721C ────────────────────────────────────────────────── */
 
     function test_IsACreatorToken() public view {
-        assertEq(frens.getTransferValidator(), frens.DEFAULT_TRANSFER_VALIDATOR(), "Limit Break's default until the owner picks");
+        assertEq(
+            frens.getTransferValidator(),
+            frens.DEFAULT_TRANSFER_VALIDATOR(),
+            "Limit Break's default until the owner picks"
+        );
         (bytes4 sel, bool isView) = frens.getTransferValidationFunction();
         assertEq(sel, bytes4(keccak256("validateTransfer(address,address,address,uint256)")));
         assertTrue(isView);
@@ -1117,12 +1330,16 @@ contract IMD6900FrensTest is Test, FrensRules {
 
     function _commons(uint256 n) internal returns (uint24[] memory a) {
         a = new uint24[](n);
-        for (uint256 i; i < n; ++i) a[i] = _common();
+        for (uint256 i; i < n; ++i) {
+            a[i] = _common();
+        }
     }
 
     function _revealMany(uint256 id, uint24[] memory combos) internal {
         uint256 d = block.timestamp + 1 hours;
-        frens.reveal(id, combos, "job-1", keccak256("out"), d, _signMany(frens, relayerKey, id, combos, d), combos.length);
+        frens.reveal(
+            id, combos, "job-1", keccak256("out"), d, _signMany(frens, relayerKey, id, combos, d), combos.length
+        );
     }
 
     function _revealManyReverts(uint256 id, uint24[] memory combos, bytes memory err) internal {
@@ -1203,7 +1420,9 @@ contract IMD6900FrensTest is Test, FrensRules {
         vm.prank(alice);
         uint256 id = frens.requestMint(3, type(uint256).max);
         uint24[] memory c = new uint24[](3);
-        for (uint8 i; i < 3; ++i) c[i] = _combo(MUMU, i, 0, 0, 0, 0, 0, 0);
+        for (uint8 i; i < 3; ++i) {
+            c[i] = _combo(MUMU, i, 0, 0, 0, 0, 0, 0);
+        }
         _revealManyReverts(id, c, abi.encodeWithSelector(IMD6900Frens.BadCombo.selector, uint8(3)));
         c[2] = _combo(BOBO, 0, 0, 0, 0, 0, 0, 0);
         _revealMany(id, c);
@@ -1212,7 +1431,9 @@ contract IMD6900FrensTest is Test, FrensRules {
 
     function test_BatchSoldOut() public {
         vm.startPrank(alice);
-        for (uint256 i; i < 222; ++i) frens.requestMint(10, type(uint256).max); // 2220 minted
+        for (uint256 i; i < 222; ++i) {
+            frens.requestMint(10, type(uint256).max); // 2220 minted
+        }
         vm.expectRevert(IMD6900Frens.SoldOut.selector);
         frens.requestMint(3, type(uint256).max);
         frens.requestMint(2, type(uint256).max);
@@ -1309,7 +1530,18 @@ contract IMD6900FrensTest is Test, FrensRules {
     function _curved() internal returns (IMD6900Frens f) {
         bytes[] memory b = new bytes[](1);
         b[0] = vm.readFileBinary("script/frens/price/prices.bin");
-        f = new IMD6900Frens(timelock, address(imd), address(imd6900), address(idmd), address(permit2), proxy, payTo, keeper, relayer, new FrenArt().write(b)[0]);
+        f = new IMD6900Frens(
+            timelock,
+            address(imd),
+            address(imd6900),
+            address(idmd),
+            address(permit2),
+            proxy,
+            payTo,
+            keeper,
+            relayer,
+            new FrenArt().write(b)[0]
+        );
         vm.startPrank(timelock);
         _rules(f, [uint16(1598), 312, 312]);
         f.sealTraits();
@@ -1353,14 +1585,18 @@ contract IMD6900FrensTest is Test, FrensRules {
         assertEq(f.quote(1), 0.69e18);
         uint256 ten = f.quote(10);
         uint256 sum;
-        for (uint256 n; n < 10; ++n) sum += f.priceOf(n);
+        for (uint256 n; n < 10; ++n) {
+            sum += f.priceOf(n);
+        }
         assertEq(ten, sum);
         vm.prank(alice);
         f.requestMint(10, ten);
         assertEq(f.floorImd(), ten - 0.5e18, "all but the job goes to the floor");
         assertEq(f.quote(1), f.priceOf(10));
         vm.startPrank(alice);
-        for (uint256 i; i < 15; ++i) f.requestMint(69, type(uint256).max); // 1045 frens in
+        for (uint256 i; i < 15; ++i) {
+            f.requestMint(69, type(uint256).max); // 1045 frens in
+        }
         vm.stopPrank();
         assertEq(f.quote(1), f.priceOf(1045));
         assertEq(f.quote(1), 3.1646e18, "fren 1046, near the plateau");
@@ -1450,7 +1686,9 @@ contract IMD6900FrensTest is Test, FrensRules {
         uint24[] memory c = _commons(5);
         _revealPart(id, c, 2);
         uint24[] memory changed = new uint24[](5);
-        for (uint256 i; i < 5; ++i) changed[i] = c[i];
+        for (uint256 i; i < 5; ++i) {
+            changed[i] = c[i];
+        }
         changed[1] = _common();
         vm.expectRevert(IMD6900Frens.BadVoucher.selector);
         this.revealPart(id, changed, 5);

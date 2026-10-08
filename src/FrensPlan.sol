@@ -21,19 +21,19 @@ library FrensPlan {
     address internal constant PAIR_HOOK = 0x667f4621030aCfAfb1bD0B64d33610A8567f2A44;
     address internal constant POOL4_HOOK = 0xc6C965Bd164c483e87d0B550671798e9A3602840;
     bytes32 internal constant PRICES_SALT = 0x0000000000000000000000000000000000000000000000000000000000000001;
-    bytes32 internal constant FRENS_SALT = 0xdf8440c5ea31de4016da4b078dd8abebfafb7e689a977d4aced853054315abf1;
-    bytes32 internal constant SWAPPER_SALT = 0x0a3a56d7a92b61a597791759afce72d0b908ca33806a339d30cfbf63ed93a8b4;
+    bytes32 internal constant FRENS_SALT = 0x063c0621992dc16d4cd8b37a279be93e3c4171a61979edd00d1feac9e3740d53;
+    bytes32 internal constant SWAPPER_SALT = 0xdeaf6d3c182075a6ac200110af80c7ec8080265f2deb7d3e2aeec281e056d188;
     bytes32 internal constant MINTER_SALT = 0x0000000000000000000000000000000000000000000000000000000000000002;
     bytes32 internal constant GATE_SALT = 0x0000000000000000000000000000000000000000000000000000000000000003;
     bytes32 internal constant RENDERER_SALT = 0x0000000000000000000000000000000000000000000000000000000000000004;
     /// @notice where it lands on Ethereum (any chain with the CREATE2 deployer)
     address internal constant PRICES_AT = 0x8f135B75Df156e6346c8525E138bC2BD652146ff;
     /// @notice where it lands on Ethereum (any chain with the CREATE2 deployer)
-    address internal constant FRENS_AT = 0x69006841041E7519fbE54BfF3F506FBDCAbabF09;
+    address internal constant FRENS_AT = 0x69007Ce82E0BF7981780585afF7c597415903547;
     /// @notice where it lands on Ethereum (any chain with the CREATE2 deployer)
-    address internal constant SWAPPER_AT = 0x6900d1D4BcF96143C6013AF72F319Ad401e7928a;
+    address internal constant SWAPPER_AT = 0x6900453deFAc8Bb12eabdcf57CCC5a14E7628AeE;
     /// @notice where it lands on Ethereum (any chain with the CREATE2 deployer)
-    address internal constant MINTER_AT = 0xb83843b6a056f0B4394F7cB83fe018600AEFc245;
+    address internal constant MINTER_AT = 0xBbb2796c9C54330788915990Ba36FDDe6dC198cF;
     /// @notice where it lands on Ethereum (any chain with the CREATE2 deployer)
-    address internal constant GATE_AT = 0x7701fdCcd014A6ab87f9b59e37786F6c07dbD39E;
+    address internal constant GATE_AT = 0x3F8d1553Cb71C8B5af013Ce985591d9B9BCD9ce2;
 }
