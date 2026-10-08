@@ -297,7 +297,6 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
 
     constructor(
         address owner_,
-        address governor_,
         address imd_,
         address imd6900_,
         address identity_,
@@ -310,11 +309,8 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
     ) {
         if (priceTable_.code.length != 1 + 3 * SUPPLY) revert BadTraits();
         priceTable = priceTable_;
-        if (owner_ == address(0) || governor_ == address(0)) revert BadRequest();
         _initializeOwner(owner_);
-        // never whoever deploys: on IMD's launch that is the swarm's factory. The launch contract (FrensLaunch) wires the
-        // frens, mints the strategy's first, opens the mint and hands this to the timelock
-        governor = governor_;
+        governor = owner_; // the deployer, until the handover
         imd = imd_;
         imd6900 = imd6900_;
         identity = identity_;
@@ -345,15 +341,21 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
 
     /// @notice How many values a trait has (the renderer draws exactly these)
     function valuesOf(uint8 trait) internal pure returns (uint8) {
-        return [3, 13, 4, 3, 6, 3, 10, 16][trait];
+        return _byte(0x100a0306_03040d03, trait); // 3, 13, 4, 3, 6, 3, 10, 16
     }
 
     function _shift(uint8 trait) internal pure returns (uint8) {
-        return [0, 2, 6, 8, 10, 13, 15, 19][trait];
+        return _byte(0x130f0d0a_08060200, trait); // 0, 2, 6, 8, 10, 13, 15, 19
     }
 
     function _bits(uint8 trait) internal pure returns (uint8) {
-        return [2, 4, 2, 2, 3, 2, 4, 4][trait];
+        return _byte(0x04040203_02020402, trait); // 2, 4, 2, 2, 3, 2, 4, 4
+    }
+
+    /// @dev The trait-th byte of a table packed lowest first; a trait past the last is no trait (BadTraits)
+    function _byte(uint64 table, uint8 trait) private pure returns (uint8) {
+        if (trait >= TRAITS) revert BadTraits();
+        return uint8(table >> (8 * trait));
     }
 
     /// @notice One trait's value out of a combo
@@ -743,11 +745,15 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
     }
 
     function _buyFloor(uint256 minOut) internal returns (bool) {
+        // $IMD here beyond the books joins the floor: IMD refunds half of each job payment to its payer (this
+        // contract), and anyone may send some. The books: the floor's $IMD, the job money, the payments Permit2 may take
+        uint256 books = floorImd + jobBudget + IERC20Min(imd).allowance(address(this), permit2);
+        uint256 imdBefore = IERC20Min(imd).balanceOf(address(this));
+        if (imdBefore > books) floorImd += imdBefore - books;
         uint256 imdIn = floorImd < maxImdPerBuy ? floorImd : maxImdPerBuy;
         if (imdIn == 0 || swapper == address(0) || block.number < lastFloorBuyBlock + buyDelayBlocks) return false;
         lastFloorBuyBlock = block.number;
         uint256 before = IERC20Min(imd6900).balanceOf(address(this));
-        uint256 imdBefore = IERC20Min(imd).balanceOf(address(this));
         // the swapper pulls what it spends, never more than this buy; if the swap fails nothing moves, and a mint
         // still goes through. It always gets its gas: a wallet's estimate would otherwise find the cheapest way through,
         // the swap failing for want of it

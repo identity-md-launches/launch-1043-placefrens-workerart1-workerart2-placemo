@@ -7,7 +7,7 @@ import {ERC20} from "solady/tokens/ERC20.sol";
 import {IMD6900Frens, IFrenSwapper, ICreatorToken, ICreatorTokenLegacy} from "../../src/frens/IMD6900Frens.sol";
 import {FrensRules} from "./FrensRules.sol";
 import {FrenMinter} from "../../src/frens/FrenMinter.sol";
-import {FrenArt} from "../../src/frens/FrenRenderer.sol";
+import {FrenArt} from "./DataWriter.sol";
 
 contract MockToken is ERC20 {
     string internal n;
@@ -132,7 +132,7 @@ contract IMD6900FrensTest is Test, FrensRules {
     }
 
     function _deploy(uint16[3] memory chars) internal returns (IMD6900Frens f) {
-        f = new IMD6900Frens(timelock, timelock, address(imd), address(imd6900), address(idmd), address(permit2), proxy, payTo, keeper, relayer, _flatPrices());
+        f = new IMD6900Frens(timelock, address(imd), address(imd6900), address(idmd), address(permit2), proxy, payTo, keeper, relayer, _flatPrices());
         vm.startPrank(timelock);
         _rules(f, chars);
         f.sealTraits();
@@ -219,7 +219,7 @@ contract IMD6900FrensTest is Test, FrensRules {
     /* ── the traits ─────────────────────────────────────────────── */
 
     function test_MintNeedsSealedTraits() public {
-        IMD6900Frens f = new IMD6900Frens(timelock, timelock, address(imd), address(imd6900), address(idmd), address(permit2), proxy, payTo, keeper, relayer, _flatPrices());
+        IMD6900Frens f = new IMD6900Frens(timelock, address(imd), address(imd6900), address(idmd), address(permit2), proxy, payTo, keeper, relayer, _flatPrices());
         vm.prank(timelock);
         f.setMintOpen(true);
         vm.prank(alice);
@@ -228,7 +228,7 @@ contract IMD6900FrensTest is Test, FrensRules {
     }
 
     function test_SealNeedsEveryTraitAndTheSupply() public {
-        IMD6900Frens f = new IMD6900Frens(timelock, timelock, address(imd), address(imd6900), address(idmd), address(permit2), proxy, payTo, keeper, relayer, _flatPrices());
+        IMD6900Frens f = new IMD6900Frens(timelock, address(imd), address(imd6900), address(idmd), address(permit2), proxy, payTo, keeper, relayer, _flatPrices());
         vm.startPrank(timelock);
         vm.expectRevert(IMD6900Frens.BadTraits.selector);
         f.sealTraits(); // nothing set
@@ -1309,7 +1309,7 @@ contract IMD6900FrensTest is Test, FrensRules {
     function _curved() internal returns (IMD6900Frens f) {
         bytes[] memory b = new bytes[](1);
         b[0] = vm.readFileBinary("script/frens/price/prices.bin");
-        f = new IMD6900Frens(timelock, timelock, address(imd), address(imd6900), address(idmd), address(permit2), proxy, payTo, keeper, relayer, new FrenArt().write(b)[0]);
+        f = new IMD6900Frens(timelock, address(imd), address(imd6900), address(idmd), address(permit2), proxy, payTo, keeper, relayer, new FrenArt().write(b)[0]);
         vm.startPrank(timelock);
         _rules(f, [uint16(1598), 312, 312]);
         f.sealTraits();

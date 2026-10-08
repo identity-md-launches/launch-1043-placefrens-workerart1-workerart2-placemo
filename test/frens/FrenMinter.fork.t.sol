@@ -37,7 +37,7 @@ contract FrenMinterForkTest is Test {
 
     function test_QuoteEth() public {
         (uint256 ethIn, uint256 imdOut) = d.minter.quoteEth(1);
-        assertEq(imdOut, 0.69e18, "exactly the price");
+        assertEq(imdOut, d.frens.priceOf(0), "exactly the price");
         assertGt(ethIn, 0);
         (uint256 eth10,) = d.minter.quoteEth(10);
         assertGt(eth10, ethIn * 9);
@@ -130,7 +130,14 @@ contract FrenMinterForkTest is Test {
         vm.roll(block.number + 1);
         vm.prank(address(0xA11CE)); // anyone
         d.frens.buyFloorWithEth(0.01 ether, 0);
-        assertApproxEqRel(d.frens.reserve(), out, 0.06e18, "the quote, short of any price limit");
+        if (d.frens.floorImd() == 0) {
+            assertApproxEqRel(d.frens.reserve(), out, 0.06e18, "the quote, short of any price limit");
+        } else {
+            // a thin pair pool: the swap stopped at its price limit and the $IMD it didn't spend waits for the next buy
+            assertGt(d.frens.reserve(), 0);
+            assertLt(d.frens.reserve(), out, "less than the unlimited quote");
+            assertEq(IERC20(s.IMD()).balanceOf(address(d.frens)), d.frens.floorImd(), "the rest waits in floorImd");
+        }
     }
 
 

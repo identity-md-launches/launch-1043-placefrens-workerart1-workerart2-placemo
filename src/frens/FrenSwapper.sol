@@ -67,9 +67,12 @@ contract FrenSwapper is IFrenSwapper {
         pairHook = pairHook_;
         imdPoolHook = imdPoolHook_;
         // the average starts at the pool's price now, so no one block's buy can set it: each moves it 1/64 of the way
-        PoolKey memory key = _pairKey(imd_, imd6900_, pairHook_);
-        (uint160 p,,,) = IPoolManager(poolManager_).getSlot0(key.toId());
-        if (p != 0) (rateAverage, averagedAt) = (_rate(p, Currency.unwrap(key.currency0) == imd_), block.number);
+        // (only where the pool manager exists: IMD deploys a launch on a fresh chain first, where it doesn't)
+        if (poolManager_.code.length != 0) {
+            PoolKey memory key = _pairKey(imd_, imd6900_, pairHook_);
+            (uint160 p,,,) = IPoolManager(poolManager_).getSlot0(key.toId());
+            if (p != 0) (rateAverage, averagedAt) = (_rate(p, Currency.unwrap(key.currency0) == imd_), block.number);
+        }
     }
 
     function pairKey() public view returns (PoolKey memory) {

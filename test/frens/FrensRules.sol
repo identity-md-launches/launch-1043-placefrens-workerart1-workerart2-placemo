@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {IMD6900Frens} from "../../src/frens/IMD6900Frens.sol";
-import {FrenArt} from "../../src/frens/FrenRenderer.sol";
+import {FrenArt} from "./DataWriter.sol";
 
 /// @dev The launch trait rules, shared by the tests: mumu and bobo from tier 2, laser eyes and the lightsabers tier 3,
 ///      gold lens / gold coat / hats / most items tier 1, a gold-coat mumu or bobo tier 3. The deploy script sets the

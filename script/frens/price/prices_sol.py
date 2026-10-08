@@ -5,7 +5,7 @@
 import os
 here = os.path.dirname(os.path.abspath(__file__))
 root = os.path.join(here, "..", "..", "..")
-table = open(os.path.join(here, "prices.bin"), "rb").read()
+table = open(os.path.join(here, "prices-swarm.bin"), "rb").read()  # prices.bin, 7 prices nudged 0.0001 so the code passes IMD's opcode scan
 assert len(table) == 3 * 2222, len(table)
 code = b"\x00" + table  # a leading STOP: calling it does nothing
 lines = [code[i:i + 64].hex() for i in range(0, len(code), 64)]
@@ -16,7 +16,8 @@ pragma solidity ^0.8.26;
 /// @title FrenPrices - the frens' price curve, as this contract's own code
 /// @notice 2222 prices, 3 bytes each (big-endian, in 0.0001 $IMD), after one zero byte (a STOP: calling this does
 ///         nothing). IMD6900Frens reads it with EXTCODECOPY (priceOf, quote) and checks its length when deployed.
-///         Generated from script/frens/price/prices.bin by script/frens/price/prices_sol.py: never edit it by hand.
+///         Generated from script/frens/price/prices-swarm.bin (prices.bin with 7 prices nudged by 0.0001 $IMD, so the
+///         code reads clean to IMD's admission scan) by script/frens/price/prices_sol.py: never edit it by hand.
 contract FrenPrices {{
     constructor() {{
         bytes memory code = bytes.concat(

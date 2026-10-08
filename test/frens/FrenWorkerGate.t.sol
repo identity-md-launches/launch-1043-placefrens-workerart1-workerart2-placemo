@@ -45,7 +45,7 @@ contract FrenWorkerGateTest is Test, FrensRules {
         idmd = new MockToken("IDMD");
         swapper = new MockSwapper(imd6900, imd);
         frens = new IMD6900Frens(
-            timelock, timelock, address(imd), address(imd6900), address(idmd), address(new MockPermit2()), makeAddr("x402"), makeAddr("payTo"),
+            timelock, address(imd), address(imd6900), address(idmd), address(new MockPermit2()), makeAddr("x402"), makeAddr("payTo"),
             makeAddr("keeper"), makeAddr("relayer"), _flatPrices()
         );
         vm.startPrank(timelock);

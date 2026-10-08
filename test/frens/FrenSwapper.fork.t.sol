@@ -38,7 +38,7 @@ contract FrenSwapperForkTest is Test, FrensRules {
         string memory rpc_ = vm.envOr("MAINNET_RPC_URL", string(""));
         if (bytes(rpc_).length == 0) vm.skip(true);
         vm.createSelectFork(rpc_);
-        frens = new IMD6900Frens(address(this), address(this), IMD, IMD6900, IDENTITY, PERMIT2, X402_PROXY, makeAddr("payTo"), keeper, makeAddr("relayer"), _flatPrices());
+        frens = new IMD6900Frens(address(this), IMD, IMD6900, IDENTITY, PERMIT2, X402_PROXY, makeAddr("payTo"), keeper, makeAddr("relayer"), _flatPrices());
         swapper = new FrenSwapper(POOL_MANAGER, IMD, IMD6900, address(frens), PAIR_HOOK, POOL4_HOOK);
         frens.setModules(address(swapper), address(0));
     }

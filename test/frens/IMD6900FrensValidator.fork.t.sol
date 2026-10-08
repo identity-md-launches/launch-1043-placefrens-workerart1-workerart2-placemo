@@ -37,7 +37,7 @@ contract IMD6900FrensValidatorForkTest is Test, FrensRules {
         string memory rpc_ = vm.envOr("MAINNET_RPC_URL", string(""));
         if (bytes(rpc_).length == 0) vm.skip(true);
         vm.createSelectFork(rpc_);
-        frens = new IMD6900Frens(address(this), address(this), IMD, IMD6900, IDENTITY, PERMIT2, X402_PROXY, makeAddr("payTo"), address(this), vm.addr(RELAYER_KEY), _flatPrices());
+        frens = new IMD6900Frens(address(this), IMD, IMD6900, IDENTITY, PERMIT2, X402_PROXY, makeAddr("payTo"), address(this), vm.addr(RELAYER_KEY), _flatPrices());
         _rules(frens, [uint16(1598), 312, 312]);
         frens.sealTraits();
         frens.setMintOpen(true);

@@ -46,7 +46,7 @@ contract IMD6900FrensPermit2ForkTest is Test, FrensRules {
         string memory rpc = vm.envOr("MAINNET_RPC_URL", string(""));
         if (bytes(rpc).length == 0) vm.skip(true);
         vm.createSelectFork(rpc);
-        frens = new IMD6900Frens(address(this), address(this), IMD, IMD6900, IDENTITY, PERMIT2, X402_PROXY, payTo, keeper, makeAddr("relayer"), _flatPrices());
+        frens = new IMD6900Frens(address(this), IMD, IMD6900, IDENTITY, PERMIT2, X402_PROXY, payTo, keeper, makeAddr("relayer"), _flatPrices());
         _rules(frens, [uint16(1598), 312, 312]);
         frens.sealTraits();
         frens.setMintOpen(true);
@@ -98,6 +98,26 @@ contract IMD6900FrensPermit2ForkTest is Test, FrensRules {
     function test_Permit2RefusesAnUnapprovedJob() public {
         vm.expectRevert();
         _settle(7, block.timestamp + 600, 0.5e18, payTo);
+    }
+
+    /// IMD refunds half of each job payment to its payer, this contract: the refund joins the floor at the next buy (a
+    /// mint's), and the payment approved but not taken yet stays out of it
+    function test_RefundsJoinTheFloor() public {
+        uint256 deadline = block.timestamp + 600;
+        _approve(7, deadline); // in flight: 0.50 Permit2 may take
+        uint256 floor0 = frens.floorImd();
+        deal(IMD, address(frens), IERC20(IMD).balanceOf(address(frens)) + 0.25e18); // IMD's refund
+        uint256 price = frens.quote(1);
+        vm.prank(alice);
+        frens.requestMint(1, type(uint256).max);
+        assertEq(frens.floorImd(), floor0 + price - 0.5e18 + 0.25e18, "the refund joins the floor, the payment in flight doesn't");
+        _settle(7, deadline, 0.5e18, payTo); // IMD takes the payment
+        uint256 floor1 = frens.floorImd();
+        price = frens.quote(1);
+        vm.prank(alice);
+        frens.requestMint(1, type(uint256).max);
+        assertEq(frens.floorImd(), floor1 + price - 0.5e18, "nothing else counted twice");
+        assertEq(IERC20(IMD).balanceOf(address(frens)), frens.floorImd() + frens.jobBudget(), "the books add up");
     }
 
     function test_EachApprovalPaysOnce() public {
