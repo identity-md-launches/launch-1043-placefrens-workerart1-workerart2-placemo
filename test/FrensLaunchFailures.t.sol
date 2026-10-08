@@ -146,24 +146,35 @@ contract FrensLaunchFailuresTest is Test, FrensRules {
         new PlaceModules(pf, address(new WorkerArt1()), address(new WorkerArt2()));
     }
 
-    /// @dev The launch deploys the renderer over whatever art it is given: the wrong chunks give a renderer that
-    ///      draws nothing (every read checks the chunk's code hash) rather than something wrong
-    function test_WrongArtGivesARendererThatDrawsNothing() public {
+    /// @dev The launch refuses art that isn't the exact code WorkerArtIndex was generated from (the renderer would
+    ///      draw nothing over it, every read checks the chunk's code hash): the chunks swapped, one with no code, or
+    ///      another data contract. It places nothing before it checks. The right order draws the new art.
+    function test_WrongArtFailsTheLaunch() public {
         PlaceFrens pf = new PlaceFrens();
         address a1 = address(new WorkerArt1());
         address a2 = address(new WorkerArt2());
-        PlaceModules swapped = new PlaceModules(pf, a2, a1);
-        WorkerFrensRenderer r = WorkerFrensRenderer(swapped.renderer());
-        assertEq(r.art1(), a2);
-        vm.expectRevert(WorkerFrensRenderer.BadArt.selector);
-        r.palette(0);
-        vm.expectRevert(WorkerFrensRenderer.BadArt.selector);
-        r.pendingURI(1);
+        bytes[] memory other = new bytes[](1);
+        other[0] = new bytes(1024);
+        address data = new FrenArt().write(other)[0];
+        address none = makeAddr("no code");
+        address[2][5] memory wrong = [[a2, a1], [a1, none], [none, a2], [a1, data], [a1, a1]];
+        // not vm.expectRevert over `new`: with forge's dynamic test linking a creation is a cheatcode call, and an
+        // expected revert there ends the test early, before anything after it is checked
+        for (uint256 i; i < wrong.length; ++i) {
+            try new PlaceModules(pf, wrong[i][0], wrong[i][1]) {
+                assertTrue(false, "the launch took the wrong art");
+            } catch (bytes memory err) {
+                assertEq(bytes4(err), Placer.PlaceFailed.selector, "PlaceFailed");
+            }
+        }
+        assertEq(FrensPlan.SWAPPER_AT.code.length, 0, "a refused launch places nothing");
         // the right order draws the new art (the palettes need nothing from the swarm)
         PlaceModules right = new PlaceModules(pf, a1, a2);
-        assertEq(WorkerFrensRenderer(right.renderer()).palette(0).length, 1024);
-        assertTrue(right.renderer() != swapped.renderer(), "another renderer");
-        assertEq(right.swapper(), swapped.swapper(), "the same modules");
+        WorkerFrensRenderer r = WorkerFrensRenderer(right.renderer());
+        assertEq(r.art1(), a1);
+        assertEq(r.art2(), a2);
+        assertEq(r.palette(0).length, 1024);
+        assertGt(FrensPlan.SWAPPER_AT.code.length, 0, "the modules are placed");
     }
 
     /* ── ETH and repeats ───────────────────────────────────────── */
