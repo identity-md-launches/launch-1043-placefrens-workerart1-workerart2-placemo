@@ -28,10 +28,12 @@ abstract contract Placer {
     }
 }
 
-/// @title PlaceFrens - the IMD swarm's launch of IMD6900 Frens, part one: the price table and the collection
-/// @notice Its constructor creates the frens' price curve (FrenPrices) and the collection (IMD6900Frens) at
-///         FrensPlan's addresses (0x6900… for the frens), for the team wallet (owner and governor), with the swarm's
-///         keeper and relayer. It calls nothing that existed before it but the CREATE2 deployer, and only if it is
+/// @title PlaceFrens - the IMD swarm's launch of Worker Frens, part one: the price table and the collection
+/// @dev The launch, in order: PlaceFrens, WorkerArt1, WorkerArt2 (src/art/WorkerArt.sol: the new art, as code), then
+///      PlaceModules.
+/// @notice Its constructor creates the frens' price curve (FrenPrices) and the collection (IMD6900Frens, named Worker
+///         Frens) at FrensPlan's addresses (0x6900… for the frens), for the team wallet (owner and governor), with the
+///         swarm's keeper and relayer. It calls nothing that existed before it but the CREATE2 deployer, and only if it is
 ///         there. After the launch the owner wires the frens (script/frens/DeployFrens.s.sol setup()).
 contract PlaceFrens is Placer {
     address public immutable prices;
@@ -61,17 +63,21 @@ contract PlaceFrens is Placer {
     }
 }
 
-/// @title PlaceModules - the IMD swarm's launch of IMD6900 Frens, part two: the frens' swapper, minter and gate
+/// @title PlaceModules - the IMD swarm's launch of Worker Frens, part four: the frens' swapper, minter, gate and renderer
 /// @notice Its constructor creates, for the frens PlaceFrens placed: the floor's swapper (FrenSwapper, 0x6900…), the
-///         ETH mint (FrenMinter) and the workers' window (FrenWorkerGate, the team wallet's), at FrensPlan's
-///         addresses. The launch passes it PlaceFrens (`$contract:PlaceFrens`).
+///         ETH mint (FrenMinter), the workers' and WL's window (FrenWorkerGate, the team wallet's) and the art
+///         (WorkerFrensRenderer, over the swarm's art already on chain and the two new chunks the launch deploys before
+///         this). The launch passes it PlaceFrens and the chunks (`$contract:PlaceFrens`, `$contract:WorkerArt1`,
+///         `$contract:WorkerArt2`). All but the renderer land at FrensPlan's addresses; the renderer's follows from the
+///         chunks' (read it here: `renderer()`).
 contract PlaceModules is Placer {
     address public immutable frens;
     address public immutable swapper;
     address public immutable minter;
     address public immutable gate;
+    address public immutable renderer;
 
-    constructor(PlaceFrens placed) {
+    constructor(PlaceFrens placed, address art1, address art2) {
         address f = placed.frens();
         frens = f;
         swapper = _place(
@@ -89,5 +95,6 @@ contract PlaceModules is Placer {
             FrensPlan.GATE_SALT,
             abi.encodePacked(FrensCode.GATE, abi.encode(FrensPlan.OWNER, f, FrensPlan.IDENTITY, FrensPlan.IMD6900))
         );
+        renderer = _place(FrensPlan.RENDERER_SALT, abi.encodePacked(FrensCode.RENDERER, abi.encode(art1, art2)));
     }
 }

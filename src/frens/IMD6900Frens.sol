@@ -324,11 +324,11 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
     }
 
     function name() public pure override returns (string memory) {
-        return "IMD6900 Frens";
+        return "Worker Frens";
     }
 
     function symbol() public pure override returns (string memory) {
-        return "FREN6900";
+        return "wFREN";
     }
 
     function tokenURI(uint256 id) public view override returns (string memory) {
@@ -341,7 +341,7 @@ contract IMD6900Frens is ERC721, Ownable, ReentrancyGuard {
 
     /// @notice How many values a trait has (the renderer draws exactly these)
     function valuesOf(uint8 trait) internal pure returns (uint8) {
-        return _byte(0x100a0306_03040d03, trait); // 3, 13, 4, 3, 6, 3, 10, 16
+        return _byte(0x100c0306_03040d03, trait); // 3, 13, 4, 3, 6, 3, 12, 16
     }
 
     function _shift(uint8 trait) internal pure returns (uint8) {

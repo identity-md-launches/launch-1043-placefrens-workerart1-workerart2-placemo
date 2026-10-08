@@ -213,4 +213,99 @@ contract FrenWorkerGateTest is Test, FrensRules {
         frens.requestMint(1, type(uint256).max);
         assertEq(frens.balanceOf(carol), 1);
     }
+
+    /* ── the WL: a Merkle root of wallets and amounts, in the same window ── */
+
+    function _leaf(address w, uint256 amount) internal pure returns (bytes32) {
+        return keccak256(bytes.concat(keccak256(abi.encode(w, amount))));
+    }
+
+    function _pair(bytes32 a, bytes32 b) internal pure returns (bytes32) {
+        return a < b ? keccak256(abi.encode(a, b)) : keccak256(abi.encode(b, a));
+    }
+
+    /// @dev A WL of carol (2) and dave (1): root and each one's proof
+    function _wl(uint256 carolAmount) internal returns (bytes32 root, bytes32[] memory carolProof, bytes32[] memory daveProof) {
+        bytes32 c = _leaf(carol, carolAmount);
+        bytes32 d = _leaf(makeAddr("dave"), 1);
+        root = _pair(c, d);
+        carolProof = new bytes32[](1);
+        carolProof[0] = d;
+        daveProof = new bytes32[](1);
+        daveProof[0] = c;
+        vm.prank(gateOwner);
+        gate.setWlRoot(root);
+    }
+
+    function test_WlWalletsMintInTheWindow_asMuchAsListed() public {
+        (, bytes32[] memory proof,) = _wl(2);
+        vm.prank(carol);
+        vm.expectRevert(abi.encodeWithSelector(FrenWorkerGate.NoCredit.selector, 0));
+        frens.requestMint(1, type(uint256).max);
+        vm.prank(carol);
+        gate.claimWl(2, proof, carol);
+        assertEq(gate.credits(carol), 2);
+        assertEq(gate.wlClaimed(carol), 2);
+        vm.startPrank(carol);
+        vm.expectRevert(abi.encodeWithSelector(FrenWorkerGate.NoCredit.selector, 2));
+        frens.requestMint(3, type(uint256).max);
+        frens.requestMint(2, type(uint256).max);
+        vm.stopPrank();
+        assertEq(frens.balanceOf(carol), 2);
+        assertEq(gate.workerMinted(), 2, "the WL's frens count in the same 420");
+    }
+
+    function test_WlOnlyAsListed_once() public {
+        (, bytes32[] memory proof, bytes32[] memory daveProof) = _wl(2);
+        vm.prank(carol);
+        vm.expectRevert(FrenWorkerGate.NotOnWl.selector);
+        gate.claimWl(5, proof, carol); // more than listed
+        vm.prank(alice);
+        vm.expectRevert(FrenWorkerGate.NotOnWl.selector);
+        gate.claimWl(2, proof, alice); // someone else's line
+        vm.prank(carol);
+        vm.expectRevert(FrenWorkerGate.NotOnWl.selector);
+        gate.claimWl(1, daveProof, carol); // dave's proof
+        vm.prank(carol);
+        gate.claimWl(2, proof, carol);
+        vm.prank(carol);
+        vm.expectRevert(abi.encodeWithSelector(FrenWorkerGate.WlClaimedAlready.selector, 2));
+        gate.claimWl(2, proof, carol);
+    }
+
+    /// @dev The owner can grow the list: a wallet whose amount went up claims the difference
+    function test_WlRaisedAmount_claimsTheDifference() public {
+        (, bytes32[] memory proof,) = _wl(2);
+        vm.prank(carol);
+        gate.claimWl(2, proof, carol);
+        (, bytes32[] memory proof5,) = _wl(5);
+        vm.prank(carol);
+        gate.claimWl(5, proof5, carol);
+        assertEq(gate.credits(carol), 5);
+        assertEq(gate.wlClaimed(carol), 5);
+    }
+
+    function test_WlRootOnlyTheOwner_andNoRootNoWl() public {
+        bytes32[] memory none = new bytes32[](0);
+        vm.prank(carol);
+        vm.expectRevert(FrenWorkerGate.NotOnWl.selector);
+        gate.claimWl(0, none, carol); // no root set: nobody, not even with an empty proof
+        vm.prank(carol);
+        vm.expectRevert();
+        gate.setWlRoot(keccak256("mine"));
+    }
+
+    /// @dev Workers and the WL share the window: once 420 are minted the public mints, credits or not
+    function test_WlAndWorkersShareThe420() public {
+        (, bytes32[] memory proof,) = _wl(2);
+        vm.prank(carol);
+        gate.claimWl(2, proof, makeAddr("carol's hot wallet"));
+        assertEq(gate.credits(makeAddr("carol's hot wallet")), 2, "credits go where the wallet says");
+        vm.prank(gateOwner);
+        gate.openPublic();
+        assertFalse(gate.workerWindow());
+        vm.prank(bob);
+        frens.requestMint(1, type(uint256).max); // the public, no credit needed
+        assertEq(frens.balanceOf(bob), 1);
+    }
 }

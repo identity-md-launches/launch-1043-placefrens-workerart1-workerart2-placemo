@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
+import {Base64} from "solady/utils/Base64.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {FrensCode} from "../src/FrensCode.sol";
 import {FrensPlan} from "../src/FrensPlan.sol";
@@ -11,6 +12,9 @@ import {FrenPrices} from "../src/frens/FrenPrices.sol";
 import {FrenSwapper} from "../src/frens/FrenSwapper.sol";
 import {FrenMinter} from "../src/frens/FrenMinter.sol";
 import {FrenWorkerGate} from "../src/frens/FrenWorkerGate.sol";
+import {WorkerFrensRenderer} from "../src/frens/WorkerFrensRenderer.sol";
+import {WorkerArt1, WorkerArt2} from "../src/art/WorkerArt.sol";
+import {WorkerArtIndex} from "../src/art/WorkerArtIndex.sol";
 import {DeployFrens} from "../script/frens/DeployFrens.s.sol";
 import {FrensTimelockBatch} from "../script/frens/FrensTimelockBatch.s.sol";
 import {FrensRules} from "./frens/FrensRules.sol";
@@ -24,14 +28,27 @@ interface IOwned {
 }
 
 /// @dev What IMD's launch does with `evm_contracts`: the contracts in order from its own deployer, constructors only,
-///      a later one given an earlier one's address (`$contract:PlaceFrens`), nothing called after
+///      a later one given earlier ones' addresses (`$contract:PlaceFrens`, `$contract:WorkerArt1`, …), nothing called after
 contract ImdStyleDeployer {
     PlaceFrens public placeFrens;
+    address public art1;
+    address public art2;
     PlaceModules public placeModules;
 
     function launch() external {
         placeFrens = new PlaceFrens();
-        placeModules = new PlaceModules(placeFrens);
+        art1 = address(new WorkerArt1());
+        art2 = address(new WorkerArt2());
+        placeModules = new PlaceModules(placeFrens, art1, art2);
+    }
+}
+
+/// @dev The renderer with its art reads open, for the tests
+contract RendererProbe is WorkerFrensRenderer {
+    constructor(address a1, address a2) WorkerFrensRenderer(a1, a2) {}
+
+    function entry(uint256 i) external view returns (bytes memory) {
+        return _entry(i);
     }
 }
 
@@ -50,8 +67,12 @@ contract FrensPlacementTest is Test {
     }
 
     function _launch(address imdDeployer) internal returns (PlaceFrens pf, PlaceModules pm) {
+        (pf, pm,) = _launchAll(imdDeployer);
+    }
+
+    function _launchAll(address imdDeployer) internal returns (PlaceFrens pf, PlaceModules pm, ImdStyleDeployer d) {
         vm.prank(imdDeployer);
-        ImdStyleDeployer d = new ImdStyleDeployer();
+        d = new ImdStyleDeployer();
         d.launch();
         (pf, pm) = (d.placeFrens(), d.placeModules());
     }
@@ -78,6 +99,7 @@ contract FrensPlacementTest is Test {
         assertEq(keccak256(FrensCode.SWAPPER), keccak256(type(FrenSwapper).creationCode), "FrenSwapper");
         assertEq(keccak256(FrensCode.MINTER), keccak256(type(FrenMinter).creationCode), "FrenMinter");
         assertEq(keccak256(FrensCode.GATE), keccak256(type(FrenWorkerGate).creationCode), "FrenWorkerGate");
+        assertEq(keccak256(FrensCode.RENDERER), keccak256(type(WorkerFrensRenderer).creationCode), "WorkerFrensRenderer");
     }
 
     function test_PlanFollowsFromTheCode() public pure {
@@ -135,13 +157,16 @@ contract FrensPlacementTest is Test {
     /* ── where it lands ─────────────────────────────────────────── */
 
     function test_LandsWhereThePlanSays() public {
-        (PlaceFrens pf, PlaceModules pm) = _launch(makeAddr("IMD's deployer"));
+        (PlaceFrens pf, PlaceModules pm, ImdStyleDeployer d) = _launchAll(makeAddr("IMD's deployer"));
         assertEq(pf.prices(), FrensPlan.PRICES_AT);
         assertEq(pf.frens(), FrensPlan.FRENS_AT);
         assertEq(pm.frens(), FrensPlan.FRENS_AT);
         assertEq(pm.swapper(), FrensPlan.SWAPPER_AT);
         assertEq(pm.minter(), FrensPlan.MINTER_AT);
         assertEq(pm.gate(), FrensPlan.GATE_AT);
+        // the renderer: where the art chunks the launch deployed put it
+        bytes memory rendererInit = abi.encodePacked(FrensCode.RENDERER, abi.encode(d.art1(), d.art2()));
+        assertEq(pm.renderer(), _create2(FrensPlan.RENDERER_SALT, rendererInit), "renderer");
         _checkWiring(pf, pm);
     }
 
@@ -205,48 +230,135 @@ contract FrensPlacementTest is Test {
         assertEq(FrenMinter(payable(pm.minter())).imd(), FrensPlan.IMD);
         assertEq(FrenWorkerGate(pm.gate()).frens(), address(f));
         assertEq(IOwned(pm.gate()).owner(), FrensPlan.OWNER);
+        assertGt(WorkerFrensRenderer(pm.renderer()).art1().code.length, 0, "the art chunks");
+        assertGt(WorkerFrensRenderer(pm.renderer()).art2().code.length, 0);
+        assertEq(f.name(), "Worker Frens");
+        assertEq(f.symbol(), "wFREN");
+        assertEq(f.imdPayTo(), 0xC94400e90bB652AFA02740bFf50824E14069c133, "every mint's job money pays the relayer's payer back");
         assertEq(pm.frens(), address(f));
     }
 
     /* ── IMD's limits ───────────────────────────────────────────── */
 
+    /// @dev Each of the launch's four contracts: initcode within EIP-3860, its creation within EIP-7825's 2^24 gas (with
+    ///      a creation transaction's own cost on top: 21,000, 32,000, and its calldata at EIP-7623's floor, 40 a byte)
     function test_FitsOneTransaction() public {
-        bytes memory initFrens = type(PlaceFrens).creationCode;
-        bytes memory initModules = abi.encodePacked(type(PlaceModules).creationCode, abi.encode(address(1)));
-        assertLt(initFrens.length, INITCODE_CAP, "PlaceFrens' initcode");
-        assertLt(initModules.length, INITCODE_CAP, "PlaceModules' initcode");
+        bytes[4] memory init = [
+            type(PlaceFrens).creationCode,
+            type(WorkerArt1).creationCode,
+            type(WorkerArt2).creationCode,
+            abi.encodePacked(type(PlaceModules).creationCode, abi.encode(address(1), address(2), address(3)))
+        ];
+        string[4] memory names = ["PlaceFrens", "WorkerArt1", "WorkerArt2", "PlaceModules"];
+        uint256[4] memory used;
         uint256 g = gasleft();
         PlaceFrens pf = new PlaceFrens();
-        uint256 gasFrens = g - gasleft();
+        used[0] = g - gasleft();
         g = gasleft();
-        new PlaceModules(pf);
-        uint256 gasModules = g - gasleft();
-        // a creation transaction's own cost on top: 21,000, 32,000, and its calldata at EIP-7623's floor (40 a byte)
-        uint256 txFrens = gasFrens + 53_000 + 40 * initFrens.length;
-        uint256 txModules = gasModules + 53_000 + 40 * initModules.length;
-        emit log_named_uint("PlaceFrens: gas", txFrens);
-        emit log_named_uint("PlaceModules: gas", txModules);
-        assertLt(txFrens, TX_GAS_CAP, "PlaceFrens in one transaction");
-        assertLt(txModules, TX_GAS_CAP, "PlaceModules in one transaction");
-        assertLt(gasFrens + gasModules + 100_000, TX_GAS_CAP, "even both in one transaction, from a factory");
+        address a1 = address(new WorkerArt1());
+        used[1] = g - gasleft();
+        g = gasleft();
+        address a2 = address(new WorkerArt2());
+        used[2] = g - gasleft();
+        g = gasleft();
+        new PlaceModules(pf, a1, a2);
+        used[3] = g - gasleft();
+        for (uint256 i; i < 4; ++i) {
+            uint256 txGas = used[i] + 53_000 + 40 * init[i].length;
+            emit log_named_uint(string.concat(names[i], ": initcode bytes"), init[i].length);
+            emit log_named_uint(string.concat(names[i], ": gas"), txGas);
+            assertLt(init[i].length, INITCODE_CAP, names[i]);
+            assertLt(txGas, TX_GAS_CAP, names[i]);
+        }
+        assertEq(a1.code.length, 23_332, "the first chunk: a STOP, then its art in 707 frames of 33 bytes");
     }
 
     function test_PassesTheAdmissionScan() public {
-        (PlaceFrens pf, PlaceModules pm) = _launch(makeAddr("IMD's deployer"));
+        (PlaceFrens pf, PlaceModules pm, ImdStyleDeployer d) = _launchAll(makeAddr("IMD's deployer"));
         _scan(type(PlaceFrens).creationCode, "PlaceFrens creation code");
+        _scan(type(WorkerArt1).creationCode, "WorkerArt1 creation code");
+        _scan(type(WorkerArt2).creationCode, "WorkerArt2 creation code");
         _scan(type(PlaceModules).creationCode, "PlaceModules creation code");
         _scan(address(pf).code, "PlaceFrens");
+        _scan(d.art1().code, "WorkerArt1");
+        _scan(d.art2().code, "WorkerArt2");
         _scan(address(pm).code, "PlaceModules");
         _scan(pf.prices().code, "the price table");
         _scan(pf.frens().code, "IMD6900Frens");
         _scan(pm.swapper().code, "FrenSwapper");
         _scan(pm.minter().code, "FrenMinter");
         _scan(pm.gate().code, "FrenWorkerGate");
+        _scan(pm.renderer().code, "WorkerFrensRenderer");
+        _scan(FrensCode.RENDERER, "WorkerFrensRenderer creation code");
         _scan(FrensCode.PRICES, "FrenPrices creation code");
         _scan(FrensCode.FRENS, "IMD6900Frens creation code");
         _scan(FrensCode.SWAPPER, "FrenSwapper creation code");
         _scan(FrensCode.MINTER, "FrenMinter creation code");
         _scan(FrensCode.GATE, "FrenWorkerGate creation code");
+    }
+
+    /* ── the new art ────────────────────────────────────────────── */
+
+    /// @dev Every entry in the launch's two chunks reads back as exactly the art kit's bytes (script/art/data); the
+    ///      swarm's entries are on Ethereum (the fork tests read those)
+    function test_NewArtReadsBackExactly() public {
+        RendererProbe r = new RendererProbe(address(new WorkerArt1()), address(new WorkerArt2()));
+        string memory d = "script/art/data/";
+        assertEq(r.entry(WorkerArtIndex.COAT), vm.readFileBinary(string.concat(d, "layers/coat.bin")), "the coat");
+        assertEq(r.entry(WorkerArtIndex.ITEM0 + 5), vm.readFileBinary(string.concat(d, "layers/item5.bin")), "item06");
+        for (uint256 b; b < 12; ++b) {
+            assertEq(r.entry(WorkerArtIndex.BG0 + b), vm.readFileBinary(string.concat(d, "layers/bg", vm.toString(b), ".bin")), "a background");
+        }
+        assertEq(r.entry(WorkerArtIndex.PALETTE), vm.readFileBinary(string.concat(d, "shared.bin")), "the shared palette");
+        string[12] memory pals = [
+            "cleanlab_blue", "cleanlab_green", "cleanlab_red", "messylab_blue", "messylab_green", "messylab_red",
+            "tubeblue", "tubegreen", "tubered", "tubeyellow", "wireframe_green", "wireframe_red"
+        ];
+        for (uint256 b; b < 12; ++b) {
+            assertEq(r.entry(WorkerArtIndex.BGPAL0 + b), vm.readFileBinary(string.concat(d, "bgpal/", pals[b], ".bin")), "its palette");
+        }
+        assertEq(WorkerArtIndex.TABLES, vm.readFileBinary(string.concat(d, "tables.bin")), "the tables");
+        vm.expectRevert(WorkerFrensRenderer.Missing.selector);
+        r.entry(WorkerArtIndex.ENTRIES);
+    }
+
+    /// @dev Other code at a chunk's address draws nothing: every read checks the chunk's code hash
+    function test_RefusesOtherArt() public {
+        RendererProbe r = new RendererProbe(address(new WorkerArt2()), address(new WorkerArt1())); // swapped
+        vm.expectRevert(WorkerFrensRenderer.BadArt.selector);
+        r.entry(WorkerArtIndex.COAT);
+        vm.expectRevert(WorkerFrensRenderer.BadArt.selector);
+        r.entry(0); // the swarm's chunks aren't on this chain
+    }
+
+    function test_Attributes() public {
+        WorkerFrensRenderer r = new WorkerFrensRenderer(address(1), address(2));
+        // pepe, Laser Eyes, Gold lens, Gold coat, Purple shirt, Bobo Hat, Wireframe Red, Bunsen Burner
+        uint24 combo = uint24(0 | 12 << 2 | 3 << 6 | 2 << 8 | 5 << 10 | 2 << 13 | 11 << 15 | 15 << 19);
+        assertEq(
+            r.attributes(combo),
+            '[{"trait_type":"Character","value":"Cyborg Pepe"},{"trait_type":"Face","value":"Laser Eyes"},{"trait_type":"Eye","value":"Gold"},{"trait_type":"Coat","value":"Gold"},{"trait_type":"Shirt","value":"Purple"},{"trait_type":"Hat","value":"Bobo Hat"},{"trait_type":"Item","value":"Bunsen Burner"},{"trait_type":"Background","value":"Wireframe Red"}]'
+        );
+        assertEq(_bgName(r, 0), "Clean Lab Blue");
+        assertEq(_bgName(r, 4), "Messy Lab Green");
+        assertEq(_bgName(r, 9), "Tube Yellow");
+    }
+
+    function _bgName(WorkerFrensRenderer r, uint256 bg) internal pure returns (string memory) {
+        bytes memory a = bytes(r.attributes(uint24(bg << 15)));
+        bytes memory key = bytes('"Background","value":"');
+        uint256 s;
+        for (uint256 i; i + key.length <= a.length; ++i) {
+            if (keccak256(_cut(a, i, key.length)) == keccak256(key)) s = i + key.length;
+        }
+        uint256 e = s;
+        while (a[e] != '"') ++e;
+        return string(_cut(a, s, e - s));
+    }
+
+    function _cut(bytes memory b, uint256 s, uint256 n) internal pure returns (bytes memory out) {
+        out = new bytes(n);
+        for (uint256 i; i < n; ++i) out[i] = b[s + i];
     }
 
     /// @dev IMD reads code as instructions (PUSH data skipped) and refuses CALLCODE, DELEGATECALL and SELFDESTRUCT
@@ -262,7 +374,8 @@ contract FrensPlacementTest is Test {
 }
 
 /// @notice On a mainnet fork, the whole road: IMD's launch puts the frens at 0x6900… (Ethereum has the CREATE2
-///         deployer), the team wallet sets them up with the swarm's art, mints the curve's first frens to IMD6900 with
+///         deployer), the renderer draws exactly what the art kit's reference draws (the swarm's chunks already there,
+///         the launch's two new ones), the team wallet sets the frens up, mints the curve's first frens to IMD6900 with
 ///         ETH, opens the mint, a public minter pays in ETH, a fren reveals and draws, and the floor waits in $IMD until
 ///         the timelock's batch whitelists the new address.
 contract FrensPlacementForkTest is Test, FrensRules {
@@ -284,6 +397,7 @@ contract FrensPlacementForkTest is Test, FrensRules {
         ImdStyleDeployer d = new ImdStyleDeployer();
         d.launch();
         (pf, pm) = (d.placeFrens(), d.placeModules());
+        vm.setEnv("MODULES", vm.toString(address(pm)));
         frens = IMD6900Frens(payable(pf.frens()));
         minter = FrenMinter(payable(pm.minter()));
         gate = FrenWorkerGate(pm.gate());
@@ -296,12 +410,53 @@ contract FrensPlacementForkTest is Test, FrensRules {
         assertEq(address(minter), FrensPlan.MINTER_AT);
         assertEq(address(gate), FrensPlan.GATE_AT);
         assertEq(uint160(address(frens)) >> 144, 0x6900);
-        assertEq(frens.name(), "IMD6900 Frens");
+        assertEq(frens.name(), "Worker Frens");
     }
 
-    function test_fork_SetupDrawsWithTheSwarmsArt() public {
+    /// @dev The art kit's reference renders (export_v3.py: script/art/data/expected.json), byte for byte: revealed frens
+    ///      over every background kind, both new and swarm layers, and unrevealed cards
+    function test_fork_DrawsLikeTheReference() public {
+        WorkerFrensRenderer r = WorkerFrensRenderer(pm.renderer());
+        string memory j = vm.readFile("script/art/data/expected.json");
+        for (uint256 i; i < 7; ++i) {
+            string memory k = string.concat(".revealed[", vm.toString(i), "]");
+            uint24 combo = uint24(vm.parseJsonUint(j, string.concat(k, ".combo")));
+            uint256 seed = vm.parseJsonUint(j, string.concat(k, ".seed"));
+            bytes32 want = vm.parseJsonBytes32(j, string.concat(k, ".bmpSha256"));
+            assertEq(sha256(r.bmp(combo, seed)), want, "a fren as the reference draws it");
+            uint256 g = gasleft();
+            string memory uri = r.tokenURI(7, combo, seed);
+            g -= gasleft();
+            emit log_named_uint("tokenURI gas", g);
+            assertLt(g, 5_000_000, "a revealed fren reads cheaply");
+            assertEq(sha256(_bmpIn(uri)), want, "its metadata shows that bitmap");
+        }
+        for (uint256 i; i < 3; ++i) {
+            string memory k = string.concat(".pending[", vm.toString(i), "]");
+            uint256 id = vm.parseJsonUint(j, string.concat(k, ".tokenId"));
+            uint256 g = gasleft();
+            string memory uri = r.pendingURI(id);
+            g -= gasleft();
+            emit log_named_uint("pendingURI gas", g);
+            assertLt(g, 1 << 24, "an unrevealed card reads within one transaction's gas (EIP-7825)");
+            assertEq(sha256(_bmpIn(uri)), vm.parseJsonBytes32(j, string.concat(k, ".bmpSha256")), "an unrevealed card");
+        }
+    }
+
+    /// @dev Every background, every character, every item draws (each layer's chunk is the one the index names)
+    function test_fork_DrawsEveryLayer() public view {
+        WorkerFrensRenderer r = WorkerFrensRenderer(pm.renderer());
+        for (uint256 i; i < 16; ++i) {
+            uint24 combo = uint24((i % 3) | (i % 13) << 2 | (i % 4) << 6 | (i % 3) << 8 | (i % 6) << 10 | (i % 12) << 15 | i << 19);
+            assertEq(r.bmp(combo, i * 7919).length, 54 + 1024 + 84 * 84);
+        }
+        for (uint256 h = 1; h < 3; ++h) assertEq(r.canvas(uint24(h << 13), 1).length, 84 * 84);
+        assertEq(r.palette(11).length, 1024);
+    }
+
+    function test_fork_SetupDrawsWithTheLaunchsArt() public {
         s.setup();
-        assertEq(frens.renderer(), s.SWARM_RENDERER());
+        assertEq(frens.renderer(), pm.renderer());
         assertEq(frens.swapper(), pm.swapper());
         assertEq(frens.workerGate(), address(gate));
         assertTrue(frens.traitsSealed());
@@ -312,7 +467,7 @@ contract FrensPlacementForkTest is Test, FrensRules {
         );
         _rules(ref, [uint16(1598), 312, 312]);
         for (uint8 t; t < 8; ++t) {
-            for (uint8 v; v < [3, 13, 4, 3, 6, 3, 10, 16][t]; ++v) {
+            for (uint8 v; v < [3, 13, 4, 3, 6, 3, 12, 16][t]; ++v) {
                 assertEq(frens.ruleOf(t, v).cap, ref.ruleOf(t, v).cap, "cap");
                 assertEq(frens.ruleOf(t, v).minTier, ref.ruleOf(t, v).minTier, "tier");
             }
@@ -338,9 +493,9 @@ contract FrensPlacementForkTest is Test, FrensRules {
         assertEq(frens.reserve(), 0);
         assertGt(frens.floorImd(), 0, "the floor waits in $IMD");
 
-        // an unrevealed fren: the swarm renderer's card
-        assertEq(bytes(frens.tokenURI(1)).length > 100, true);
-        assertEq(_prefix(frens.tokenURI(1), 29), "data:application/json;base64,");
+        // an unrevealed fren: the card, under the new name, no IMD in the words
+        WorkerFrensRenderer art = WorkerFrensRenderer(pm.renderer());
+        _checkMeta(frens.tokenURI(1), "Worker Fren #1", _image(art.pendingURI(1)));
 
         // the opening: the workers' window, then the public, who pay in ETH
         vm.startPrank(OWNER);
@@ -358,7 +513,7 @@ contract FrensPlacementForkTest is Test, FrensRules {
         assertEq(frens.balanceOf(buyer), 2);
         assertEq(frens.totalMinted(), 8);
 
-        // a reveal (a test relayer signs, as the swarm's relayer does): the swarm's art draws it
+        // a reveal (a test relayer signs, as the swarm's relayer does): the renderer draws it
         (address keeper, address payTo) = (s.KEEPER(), s.IMD_PAY_TO()); // not in the call: they'd use up the prank
         vm.prank(OWNER);
         frens.setRoles(keeper, vm.addr(relayerKey), payTo);
@@ -368,9 +523,9 @@ contract FrensPlacementForkTest is Test, FrensRules {
         (uint8 v, bytes32 r, bytes32 s_) = vm.sign(relayerKey, frens.voucherDigest(id, combos, "job-1", keccak256("out"), deadline));
         frens.reveal(id, combos, "job-1", keccak256("out"), deadline, abi.encodePacked(r, s_, v), 2);
         assertEq(frens.comboOf(7), combos[0]);
-        string memory uri = frens.tokenURI(7);
-        assertEq(_prefix(uri, 29), "data:application/json;base64,");
-        assertGt(bytes(uri).length, 1000, "the swarm's drawing");
+        // revealed: its own drawing, under the new name
+        assertEq(_bmpIn(frens.tokenURI(7)), art.bmp(combos[0], frens.seedOf(7)));
+        _checkMeta(frens.tokenURI(7), "Worker Fren #7", _image(art.tokenURI(7, combos[0], frens.seedOf(7))));
 
         // sell one to the floor, in $IMD
         vm.prank(buyer);
@@ -397,6 +552,65 @@ contract FrensPlacementForkTest is Test, FrensRules {
         s.handover(frens);
         assertEq(frens.governor(), s.TIMELOCK());
         assertEq(frens.owner(), OWNER);
+    }
+
+    /// @dev The metadata names the fren as given, says nothing of IMD, and shows exactly `image`
+    function _checkMeta(string memory uri, string memory name, string memory image) internal pure {
+        assertEq(_prefix(uri, 29), "data:application/json;base64,");
+        string memory json = _json(uri);
+        assertTrue(_has(json, string.concat('"name":"', name, '"')), "the new name");
+        assertFalse(_has(json, "IMD"), "no IMD in the metadata");
+        assertEq(keccak256(bytes(_image(uri))), keccak256(bytes(image)), "the renderer's image");
+        assertGt(bytes(image).length, 1000);
+    }
+
+    /// @dev The bitmap inside a metadata URI's image: JSON, then SVG, then BMP, each base64
+    function _bmpIn(string memory uri) internal pure returns (bytes memory) {
+        bytes memory img = bytes(_image(uri));
+        bytes memory svgPrefix = bytes("data:image/svg+xml;base64,");
+        bytes memory svg = Base64.decode(string(_from(img, svgPrefix.length)));
+        bytes memory key = bytes("data:image/bmp;base64,");
+        uint256 from = _find(svg, key, 0) + key.length;
+        uint256 e = _find(svg, bytes('"'), from);
+        bytes memory b64 = new bytes(e - from);
+        for (uint256 i; i < b64.length; ++i) b64[i] = svg[from + i];
+        return Base64.decode(string(b64));
+    }
+
+    function _from(bytes memory b, uint256 at) internal pure returns (bytes memory out) {
+        out = new bytes(b.length - at);
+        for (uint256 i; i < out.length; ++i) out[i] = b[at + i];
+    }
+
+    function _json(string memory uri) internal pure returns (string memory) {
+        bytes memory u = bytes(uri);
+        bytes memory b64 = new bytes(u.length - 29);
+        for (uint256 i; i < b64.length; ++i) b64[i] = u[29 + i];
+        return string(Base64.decode(string(b64)));
+    }
+
+    /// @dev The "image" field of a data-URI metadata
+    function _image(string memory uri) internal pure returns (string memory) {
+        bytes memory j = bytes(_json(uri));
+        bytes memory key = bytes('"image":"');
+        uint256 s = _find(j, key, 0) + key.length;
+        uint256 e = _find(j, bytes('"'), s);
+        bytes memory out = new bytes(e - s);
+        for (uint256 i; i < out.length; ++i) out[i] = j[s + i];
+        return string(out);
+    }
+
+    function _has(string memory hay, string memory needle) internal pure returns (bool) {
+        return _find(bytes(hay), bytes(needle), 0) != type(uint256).max;
+    }
+
+    function _find(bytes memory hay, bytes memory needle, uint256 from) internal pure returns (uint256) {
+        for (uint256 i = from; i + needle.length <= hay.length; ++i) {
+            bool ok = true;
+            for (uint256 k; k < needle.length && ok; ++k) ok = hay[i + k] == needle[k];
+            if (ok) return i;
+        }
+        return type(uint256).max;
     }
 
     function _prefix(string memory str, uint256 n) internal pure returns (string memory) {

@@ -1,0 +1,53 @@
+{
+ "revealed": [
+  {
+   "combo": 0,
+   "seed": "0",
+   "bmpSha256": "0x1e4af63a27267a4f7e1de68326015e85270f3f63b58eb1716319adb47aa4956c"
+  },
+  {
+   "combo": 6542748,
+   "seed": "1",
+   "bmpSha256": "0x1f0a54b33279f72356bf43b111a416ef674edd1393946be65f05bbb680a89e81"
+  },
+  {
+   "combo": 7440973,
+   "seed": "6900",
+   "bmpSha256": "0x95f2d2c8f80a90049634cd9da7c9cab1046f1c5faf3e978afe7b8076805e0f50"
+  },
+  {
+   "combo": 3969218,
+   "seed": "57896044618658097711785492504343953926634992332820282019728792003956564832313",
+   "bmpSha256": "0x6700dc064e618d03fcf21fdad1f3b82f53fdefb25a5d4ea47faddf31bdf36a40"
+  },
+  {
+   "combo": 8234544,
+   "seed": "424242",
+   "bmpSha256": "0x5d6dd488c02950f3ab453b0320c0da7e5b267a35c5154fcfc7ff1345dd83214a"
+  },
+  {
+   "combo": 3473905,
+   "seed": "77",
+   "bmpSha256": "0xa3b23196d00746460c543441bd39d1dcdc73046ee1b7877505a97d5e74042e3a"
+  },
+  {
+   "combo": 3312810,
+   "seed": "18446744073709551615",
+   "bmpSha256": "0x7dd2c4e94d0bdaa7078aed94e52609f55b85e0d9a8fb533667019c988266160a"
+  }
+ ],
+ "pending": [
+  {
+   "tokenId": 1,
+   "bmpSha256": "0x2279c0d869a2b7f33d545bd5e3aef431b62af602353baff11d7f27ba84600d47"
+  },
+  {
+   "tokenId": 7,
+   "bmpSha256": "0x1e56160a446e3e1234472c0dbaf77575f64f27126e998d6604f8163ebb9a13f5"
+  },
+  {
+   "tokenId": 2222,
+   "bmpSha256": "0x3ec6c6461a61c36ef26e15bd932e22ff592e9ca0e2807d7875b440f00e082a93"
+  }
+ ]
+}

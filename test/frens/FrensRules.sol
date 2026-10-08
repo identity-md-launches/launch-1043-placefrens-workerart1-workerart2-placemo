@@ -43,7 +43,7 @@ abstract contract FrensRules {
         (c, t) = _fill(3, 266, 1);
         (c[0], t[0]) = (2222, 0);
         f.setTraitRules(5, c, t);
-        (c, t) = _fill(10, 2222, 0);
+        (c, t) = _fill(12, 2222, 0);
         f.setTraitRules(6, c, t);
         (c, t) = _fill(16, 140, 1);
         (c[0], t[0]) = (2222, 0);

@@ -13,18 +13,23 @@ interface IERC20Min {
     function approve(address spender, uint256 amount) external returns (bool);
 }
 
+interface IPlacedModules {
+    function renderer() external view returns (address);
+}
+
 /// @notice The frens after the IMD swarm has deployed them (src/FrensPlacement.sol, at FrensPlan's addresses): the team
-///         wallet (owner and governor) wires them, draws them with the swarm's art, mints the curve's first frens to
-///         IMD6900 and hands the governor to the timelock. Every call is the team wallet's. The other tests deploy the
-///         same contracts with plain `new` ({deploy}).
-///   forge script script/frens/DeployFrens.s.sol --sig "setup()" --rpc-url … --account imdstr-deployer --broadcast
+///         wallet (owner and governor) wires them, points them at the launch's renderer, mints the curve's first frens
+///         to IMD6900 and hands the governor to the timelock. Every call is the team wallet's. The other tests deploy
+///         the same contracts with plain `new` ({deploy}).
+///   MODULES=<the launch's PlaceModules> forge script script/frens/DeployFrens.s.sol --sig "setup()" --rpc-url … \
+///     --account imdstr-deployer --broadcast
 contract DeployFrens is Script {
     address public constant IMD = 0xD34a99Bc0f67aE1bbd63C660e6d0b0dd03E263B7;
     address public constant IMD6900 = 0x0000198C940D8cD70Cb9ACeC5E3af8216ac57d2F;
     address public constant IDENTITY = 0x0000eC93127BAA929E58E97dd0095A2BFb38ec1D;
     address public constant PERMIT2 = 0x000000000022D473030F116dDEE9F6B43aC78BA3;
     address public constant X402_PROXY = 0x402085c248EeA27D92E8b30b2C58ed07f9E20001;
-    address public constant IMD_PAY_TO = 0x4e0fA57Bde726079356537E2F34d671E9F41ADbc; // IMD's payee for paid jobs
+    address public constant IMD_PAY_TO = 0xC94400e90bB652AFA02740bFf50824E14069c133; // job payee: the relayer's payer
     address public constant POOL_MANAGER = 0x000000000004444c5dc75cB358380D2e3dE08A90;
     address public constant PAIR_HOOK = 0x667f4621030aCfAfb1bD0B64d33610A8567f2A44; // IMD6900/$IMD
     address public constant POOL4_HOOK = 0xc6C965Bd164c483e87d0B550671798e9A3602840; // IMD's ETH/$IMD
@@ -32,7 +37,6 @@ contract DeployFrens is Script {
     address public constant DEPLOYER = 0x35dA9C0303507ddf708E87F2568EdDf12c47a059; // the team wallet: owner and governor
     address public constant KEEPER = 0x75521bC4b21CAFD5bbc008A76D0988f777BD5888; // the frens relayer's keeper (Railway)
     address public constant RELAYER = 0x3c038c9D0ab5532b5cae78dABeda916e34af3D5E; // signs the reveal vouchers
-    address public constant SWARM_RENDERER = 0xC92495Adc59d711A89A91cc8D90d8F7d92D075ba; // the IMD swarm's art (#868)
 
     struct Deployed {
         IMD6900Frens frens;
@@ -42,17 +46,21 @@ contract DeployFrens is Script {
         FrenWorkerGate gate;
     }
 
-    /// @notice After the swarm's launch, from the team wallet (the frens' owner and governor): the swarm's art, the
-    ///         swapper and the workers' window, the launch's trait rules, sealed. Reads where the launch put them.
+    /// @notice After the swarm's launch, from the team wallet (the frens' owner and governor): the launch's renderer,
+    ///         the swapper and the workers' window, the launch's trait rules, sealed. Reads where the launch put them:
+    ///         the renderer from its PlaceModules (MODULES in the env), or RENDERER.
     function setup() external {
         (address frens, address swapper,, address gate) = placed();
+        address renderer = vm.envOr("RENDERER", address(0));
+        if (renderer == address(0)) renderer = IPlacedModules(vm.envAddress("MODULES")).renderer();
+        require(renderer.code.length != 0, "no renderer placed");
         vm.startBroadcast(DEPLOYER);
-        IMD6900Frens(payable(frens)).setRenderer(SWARM_RENDERER);
+        IMD6900Frens(payable(frens)).setRenderer(renderer);
         IMD6900Frens(payable(frens)).setModules(swapper, gate);
         launchRules(IMD6900Frens(payable(frens)));
         IMD6900Frens(payable(frens)).sealTraits();
         vm.stopBroadcast();
-        console2.log("frens", frens, "set up, sealed, drawn by", SWARM_RENDERER);
+        console2.log("frens", frens, "set up, sealed, drawn by", renderer);
     }
 
     /// @notice Where src/FrensPlacement.sol puts them (FrensPlan; FRENS / SWAPPER / MINTER / GATE in the env override it)
@@ -126,7 +134,7 @@ contract DeployFrens is Script {
         (c, t) = _fill(3, 266, 1);
         (c[0], t[0]) = (2222, 0);
         f.setTraitRules(5, c, t);
-        (c, t) = _fill(10, 2222, 0);
+        (c, t) = _fill(12, 2222, 0);
         f.setTraitRules(6, c, t);
         (c, t) = _fill(16, 140, 1);
         (c[0], t[0]) = (2222, 0);
