@@ -1,0 +1,26 @@
+{
+  "kind": "evm_contracts",
+  "contracts": [
+    {
+      "contract": "PlaceFrens",
+      "constructorArgs": []
+    },
+    {
+      "contract": "WorkerArt1",
+      "constructorArgs": []
+    },
+    {
+      "contract": "WorkerArt2",
+      "constructorArgs": []
+    },
+    {
+      "contract": "PlaceModules",
+      "constructorArgs": [
+        "$contract:PlaceFrens",
+        "$contract:WorkerArt1",
+        "$contract:WorkerArt2"
+      ]
+    }
+  ],
+  "notes": "Ethereum launch of Worker Frens (wFREN), 2222 on-chain pixel frens, using the accepted sources unchanged. PlaceFrens (src/FrensPlacement.sol) creates FrenPrices and IMD6900Frens. WorkerArt1 and WorkerArt2 (src/art/WorkerArt.sol) contain the new art as PUSH-framed data. PlaceModules (src/FrensPlacement.sol) creates FrenSwapper, FrenMinter, FrenWorkerGate and WorkerFrensRenderer, using the two new art contracts and the existing Ethereum FrenArtChunk1..7. Placement uses the creation code in src/FrensCode.sol, the salts in src/FrensPlan.sol and the standard CREATE2 deployer 0x4e59b44847b379578588920cA78FbF26c0B4956C: the collection is 0x69006841041E7519fbE54BfF3F506FBDCAbabF09 and the swapper is 0x6900d1D4BcF96143C6013AF72F319Ad401e7928a. Without that deployer, placement uses its own CREATE2 with the same wiring and different addresses. The collection's owner and governor and the gate's owner are the team wallet 0x35dA9C0303507ddf708E87F2568EdDf12c47a059; the launch retains no role. After deployment, the team wallet performs script/frens/DeployFrens.s.sol setup(), using PlaceModules.renderer(). That separate owner action is not part of this manifest."
+}
