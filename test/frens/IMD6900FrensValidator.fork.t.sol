@@ -37,7 +37,18 @@ contract IMD6900FrensValidatorForkTest is Test, FrensRules {
         string memory rpc_ = vm.envOr("MAINNET_RPC_URL", string(""));
         if (bytes(rpc_).length == 0) vm.skip(true);
         vm.createSelectFork(rpc_);
-        frens = new IMD6900Frens(address(this), IMD, IMD6900, IDENTITY, PERMIT2, X402_PROXY, makeAddr("payTo"), address(this), vm.addr(RELAYER_KEY), _flatPrices());
+        frens = new IMD6900Frens(
+            address(this),
+            IMD,
+            IMD6900,
+            IDENTITY,
+            PERMIT2,
+            X402_PROXY,
+            makeAddr("payTo"),
+            address(this),
+            vm.addr(RELAYER_KEY),
+            _flatPrices()
+        );
         _rules(frens, [uint16(1598), 312, 312]);
         frens.sealTraits();
         frens.setMintOpen(true);
@@ -50,7 +61,8 @@ contract IMD6900FrensValidatorForkTest is Test, FrensRules {
         uint24[] memory combos = new uint24[](1);
         combos[0] = _combo(PEPE, 1, 0, 0, 2, 0, 7, 0);
         uint256 deadline = block.timestamp + 1 hours;
-        (uint8 v, bytes32 r, bytes32 s_) = vm.sign(RELAYER_KEY, frens.voucherDigest(id, combos, "job", bytes32(0), deadline));
+        (uint8 v, bytes32 r, bytes32 s_) =
+            vm.sign(RELAYER_KEY, frens.voucherDigest(id, combos, "job", bytes32(0), deadline));
         frens.reveal(id, combos, "job", bytes32(0), deadline, abi.encodePacked(r, s_, v), combos.length);
     }
 
@@ -85,15 +97,50 @@ contract IMD6900FrensValidatorForkTest is Test, FrensRules {
         assertFalse(bare);
 
         // a real OpenSea sale: its zone, one of the validator's default authorizers, authorizes this transfer first,
-        // then the conduit moves the fren in the same transaction
-        vm.prank(OPENSEA_ZONE, buyer);
-        IValidator(v).beforeAuthorizedTransfer(OPENSEA_CONDUIT, address(frens), 1);
-        vm.prank(OPENSEA_CONDUIT, buyer);
-        (bool sale,) = address(frens).call(abi.encodeCall(frens.transferFrom, (holder, buyer, 1)));
+        // then the conduit moves the fren in the same transaction. The validator keeps the authorization in transient
+        // storage, and Foundry clears transient storage between two top-level calls from a test, so both calls must
+        // leave from one contract frame, as they do in a Seaport fulfilment: relays etched at the zone's and the
+        // conduit's addresses, driven by one fulfilment contract (test/frens/IMD6900FrensValidator.t.sol proves the
+        // shape offline against a stand-in validator).
+        vm.etch(OPENSEA_ZONE, type(Relay).runtimeCode);
+        vm.etch(OPENSEA_CONDUIT, type(Relay).runtimeCode);
+        Fulfilment seaport = new Fulfilment();
+        vm.prank(buyer, buyer);
+        (bool authorized, bool sale) = seaport.sell(v, OPENSEA_ZONE, OPENSEA_CONDUIT, address(frens), holder, buyer, 1);
+        emit log_named_string("OpenSea's zone authorizes the conduit", authorized ? "allowed" : "blocked");
         emit log_named_string("OpenSea sale (zone-authorized)", sale ? "allowed" : "blocked");
+        assertTrue(authorized, "the zone is on the validator's authorizer list");
         assertTrue(sale, "OpenSea can sell frens");
+        assertEq(frens.ownerOf(1), buyer);
+
+        // the authorization was for that one transfer: in a new frame the conduit is a bare operator again
+        vm.prank(buyer);
+        frens.setApprovalForAll(OPENSEA_CONDUIT, true);
+        vm.prank(OPENSEA_CONDUIT, buyer);
+        (bool again,) = address(frens).call(abi.encodeCall(frens.transferFrom, (buyer, bob, 1)));
+        assertFalse(again, "the zone's authorization does not outlive the sale");
         assertEq(frens.ownerOf(1), buyer);
     }
 }
 
 contract Rando {}
+
+/// @dev Etched at an address so a call leaves from it: msg.sender at the target is this address
+contract Relay {
+    function relay(address target, bytes calldata data) external returns (bool ok) {
+        (ok,) = target.call(data);
+    }
+}
+
+/// @dev One Seaport fulfilment in one frame: the zone authorizes the conduit's transfer, then the conduit moves the fren
+contract Fulfilment {
+    function sell(address validator, address zone, address conduit, address token, address from, address to, uint256 id)
+        external
+        returns (bool authorized, bool sale)
+    {
+        authorized =
+            Relay(zone).relay(validator, abi.encodeCall(IValidator.beforeAuthorizedTransfer, (conduit, token, id)));
+        sale =
+            Relay(conduit).relay(token, abi.encodeWithSignature("transferFrom(address,address,uint256)", from, to, id));
+    }
+}
