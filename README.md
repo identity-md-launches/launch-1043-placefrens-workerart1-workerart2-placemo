@@ -2,7 +2,8 @@
 
 Worker Frens (wFREN) is a 2222-piece collection of on-chain pixel frens. Five AI agents build each one, layer by layer.
 This repository packs it so the IMD swarm can deploy the whole collection with IMD's `evm_contracts` launch: four
-contracts, constructors only, nothing called after. The collection and its swapper land at addresses fixed in advance
+contracts deployed through their constructors. The factory makes no initialization calls; the team wallet then
+performs the setup described below before minting. The collection and its swapper land at addresses fixed in advance
 that start `0x6900`.
 
 | | where it lands on Ethereum |
@@ -59,9 +60,10 @@ the exact creation code:
 - Regenerate both with `forge build && python3 script/placement/gen.py`. It keeps salts that still fit; `--remine`
   mines new ones.
 
-Anyone can put these exact bytes at these addresses: it is then the very same contract, and the launch takes it as it
-is. On a chain without the CREATE2 deployer (IMD's fresh-chain run) the launch creates the same contracts with its own
-CREATE2.
+Anyone can put these exact bytes at these addresses, and the launch takes the contract as it is. Identical creation
+code does not guarantee identical storage: the swapper seeds its average from the pool price in its deployment block.
+The imported audit reproductions and unresolved findings are recorded in `ADAPTATION.md`. On a chain without the
+CREATE2 deployer (IMD's fresh-chain run) the launch creates the same contracts with its own CREATE2.
 
 ## The launch (`evm_contracts`, Ethereum, chain id 1)
 
@@ -87,6 +89,9 @@ CREATE2.
 
 `forge test` runs offline; the fork tests run with `MAINNET_RPC_URL`.
 
+- `test/FrensLaunchReview.t.sol`: the protected factory's CREATE2 deployment pattern, the team wallet's roles,
+  a trace of the fresh-chain constructor calls, and reproductions of the imported audit findings. The audit tests
+  assert the observed behavior of the pinned code; passing them does **not** mean those findings are fixed.
 - `test/FrensPlacement.t.sol`:
   - the code is the sources' own, and the plan follows from it;
   - the addresses are the same whoever deploys, and the launch deploys on a fresh chain;
