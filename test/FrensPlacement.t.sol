@@ -95,6 +95,26 @@ contract FrensPlacementTest is Test {
         assertEq(uint160(FrensPlan.SWAPPER_AT) >> 144, 0x6900, "the swapper starts 0x6900");
     }
 
+    /// @dev The price table the launch deploys is the curve (prices.bin), but for seven prices 0.0001 $IMD up so its
+    ///      bytes read clean to the admission scan (prices-swarm.bin)
+    function test_PriceTableIsTheCurve() public {
+        (PlaceFrens pf,) = _launch(makeAddr("IMD's deployer"));
+        bytes memory code = pf.prices().code;
+        bytes memory curve = vm.readFileBinary("script/frens/price/prices.bin");
+        bytes memory swarm = vm.readFileBinary("script/frens/price/prices-swarm.bin");
+        assertEq(code, abi.encodePacked(hex"00", swarm), "the code: a STOP, then prices-swarm.bin");
+        uint256 nudged;
+        for (uint256 n; n < 2222; ++n) {
+            uint256 a = uint256(uint8(curve[3 * n])) << 16 | uint256(uint8(curve[3 * n + 1])) << 8 | uint8(curve[3 * n + 2]);
+            uint256 b = uint256(uint8(swarm[3 * n])) << 16 | uint256(uint8(swarm[3 * n + 1])) << 8 | uint8(swarm[3 * n + 2]);
+            if (a != b) {
+                assertEq(b, a + 1, "one unit up");
+                ++nudged;
+            }
+        }
+        assertEq(nudged, 7);
+    }
+
     /// @dev The script's addresses and the plan's are the same
     function test_PlanMatchesTheScript() public {
         DeployFrens s = new DeployFrens();

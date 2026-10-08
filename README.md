@@ -66,6 +66,8 @@ Read the addresses from them: `PlaceFrens.frens()`, `prices()`; `PlaceModules.sw
 - `test_DeploysOnAFreshChain`: no CREATE2 deployer and nothing the frens name: the same contracts, wired the same.
 - `test_FitsOneTransaction`: each initcode under EIP-3860's 49,152 bytes (40,503 and 21,755), each launch transaction
   under EIP-7825's 2^24 gas (about 8.6M and 4.3M, calldata included), both together too.
+- `test_PriceTableIsTheCurve`: the price table deployed is the curve (`script/frens/price/prices.bin`), but for seven
+  prices one unit (0.0001 $IMD) up.
 - `test_PassesTheAdmissionScan`: no code the launch creates or runs shows CALLCODE, DELEGATECALL or SELFDESTRUCT
   (PUSH data skipped), the price table included (seven prices are 0.0001 $IMD up so its bytes read clean). The two
   launch contracts pass it built with or without via-IR, optimized or not.
